@@ -1,0 +1,149 @@
+# Build locally (default):   ./scripts/compose.sh up --build -d
+# Run published images:        PAPERGRADER_REGISTRY=ghcr.io/<owner>/<repo> PAPERGRADER_TAG=<version> \
+#                              docker compose pull && docker compose up -d --no-build
+# Settings shared by api and worker. Listed explicitly (no env_file) so that Claude credentials in
+# .env reach only the `claude` container.
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://grader:${DB_PASSWORD:-grader}@db:5432/grader
+  STORAGE_DIR: /data/storage
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-720}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+  GRADER_PROVIDER: ${GRADER_PROVIDER:-claude_runner}
+  CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5-5}
+  GRADER_TIMEOUT_SECONDS: ${GRADER_TIMEOUT_SECONDS:-600}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+  CLAUDE_RUNNER_URL: http://claude:9000
+  CLAUDE_RUNNER_TOKEN: ${CLAUDE_RUNNER_TOKEN:?set CLAUDE_RUNNER_TOKEN in .env (e.g. openssl rand -hex 32)}
+
+services:
+  db:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: grader
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-grader}
+      POSTGRES_DB: grader
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    # SIGINT = Postgres "fast shutdown": flushes and exits promptly. The default SIGTERM waits for every
+    # client to disconnect and can outlast the grace period, which forces crash recovery on the next start.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grader"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./api
+    image: ${PAPERGRADER_REGISTRY:-localhost/papergrader}/api:${PAPERGRADER_TAG:-local}
+    environment: *app-env
+    volumes:
+      - storage:/data/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"  # dev convenience only; users never need to reach the API directly
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+    # After a host/daemon restart everything starts at once and Postgres may not be ready yet, so
+    # retry the migration for about a minute instead of exiting. A real migration error still stops here.
+    command:
+      - sh
+      - -c
+      - |
+        n=0
+        until alembic upgrade head; do
+          n=$$((n+1))
+          [ "$$n" -ge 30 ] && { echo "database never became ready"; exit 1; }
+          echo "waiting for the database ($$n/30)"; sleep 2
+        done
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # Grades papers: renders pages, then asks the `claude` service to do the model call.
+  # Plain Python image; no Node, no CLI, no Claude credentials.
+  worker:
+    build: ./api
+    image: ${PAPERGRADER_REGISTRY:-localhost/papergrader}/api:${PAPERGRADER_TAG:-local}  # same image as api, different command
+    environment: *app-env
+    volumes:
+      - storage:/data/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      claude:
+        condition: service_started
+    restart: unless-stopped
+    # Jobs interrupted by a stop are requeued when the worker starts again (see app/jobs/queue.py).
+    stop_grace_period: 20s
+    command: python -m app.jobs.worker
+
+  # Owns the Claude CLI and the Claude login. Internal network only (no published port).
+  # First-time login:  ./scripts/claude-login.sh
+  claude:
+    build:
+      context: .
+      dockerfile: claude/Dockerfile
+    image: ${PAPERGRADER_REGISTRY:-localhost/papergrader}/claude:${PAPERGRADER_TAG:-local}
+    environment:
+      CLAUDE_RUNNER_TOKEN: ${CLAUDE_RUNNER_TOKEN:?set CLAUDE_RUNNER_TOKEN in .env (e.g. openssl rand -hex 32)}
+      CLAUDE_RUNNER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      # Optional alternatives to the interactive login. Leave empty to use the login volume.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_BARE: ${CLAUDE_BARE:-false}  # --bare ignores the login; only for API-key setups
+      # OpenTelemetry export (metrics/logs) to YOUR collector. Off unless CLAUDE_CODE_ENABLE_TELEMETRY=1.
+      # Each paper is a short-lived `claude -p` process, hence the 1s export interval and longer
+      # shutdown flush. Prompt text and tool details are not exported unless you opt in with
+      # OTEL_LOG_USER_PROMPTS / OTEL_LOG_TOOL_DETAILS, which this file deliberately does not pass through
+      # (the prompts contain student work).
+      CLAUDE_CODE_ENABLE_TELEMETRY: ${CLAUDE_CODE_ENABLE_TELEMETRY:-0}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-otlp}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/json}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: ${OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE:-cumulative}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.name=paper-grader-claude}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-1000}
+      OTEL_LOGS_EXPORT_INTERVAL: ${OTEL_LOGS_EXPORT_INTERVAL:-1000}
+      CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS: ${CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS:-5000}
+    volumes:
+      - claude-home:/home/claude
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 10s
+      retries: 5
+
+  web:
+    build: ./web
+    image: ${PAPERGRADER_REGISTRY:-localhost/papergrader}/web:${PAPERGRADER_TAG:-local}
+    environment:
+      # Hostname(s) users browse to, comma-separated (also "*.example.com"). Read at RUNTIME: changing it
+      # needs only `up -d web`, never a rebuild. Requests from other hosts fail the cross-site check.
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # The browser only talks to this service; it proxies /api/* to the API over the compose network.
+      API_INTERNAL_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    # Node as PID 1 ignores SIGTERM, so `stop`/`restart` would wait out the whole grace period and then
+    # SIGKILL it. A tiny init process forwards the signal.
+    init: true
+    ports:
+      - "4321:4321"
+
+volumes:
+  dbdata:
+  storage:
+  claude-home:

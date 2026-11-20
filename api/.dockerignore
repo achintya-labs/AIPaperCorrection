@@ -1,0 +1,9 @@
+tests
+tests_pg
+pytest.ini
+__pycache__
+**/__pycache__
+.pytest_cache
+storage
+.env
+*.db

@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Blocks the commit unless the tests for what you changed pass. Installed by ./scripts/setup-dev.sh
+# (git config core.hooksPath .githooks). CI runs the same checks, so --no-verify only postpones the failure.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec ./scripts/precommit.sh

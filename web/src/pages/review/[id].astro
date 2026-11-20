@@ -1,0 +1,8 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import Review from "../../components/Review";
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id) || id < 1) return new Response("Not found", { status: 404 });
+---
+<Layout title={`Review #${id}`} wide fill><Review id={id} client:load /></Layout>

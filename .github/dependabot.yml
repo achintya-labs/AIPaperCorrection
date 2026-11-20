@@ -1,0 +1,16 @@
+# Dependencies are version ranges and the Claude CLI is installed unpinned, so a fresh build can differ from
+# yesterday's. Weekly update PRs run the full CI before anything changes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directories: [/api, /claude, /]
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directories: [/api, /web, /claude]
+    schedule: { interval: weekly }

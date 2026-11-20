@@ -1,0 +1,44 @@
+---
+import "../styles.css";
+
+interface Props { title: string; wide?: boolean; fill?: boolean }
+const { title, wide = false, fill = false } = Astro.props;
+const user = Astro.locals.user;
+const path = Astro.url.pathname;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} · Paper Grader</title>
+  </head>
+  <body class:list={[{ "fill-page": fill }]}>
+    {user && (
+      <header class="topbar">
+        <a class="brand" href="/">Paper Grader</a>
+        <nav>
+          <a href="/" aria-current={path === "/" ? "page" : undefined}>My queue</a>
+          {user.role === "admin" && (
+            <>
+              <a href="/admin" aria-current={path.startsWith("/admin") && !path.startsWith("/admin/users") ? "page" : undefined}>Exams</a>
+              <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Users</a>
+            </>
+          )}
+        </nav>
+        <a class="small" href="/account" aria-current={path === "/account" ? "page" : undefined} title="Change your password">{user.email} ({user.role})</a>
+        <button id="logout">Log out</button>
+      </header>
+    )}
+    <main class:list={["container", { wide, fill }]}>
+      <slot />
+    </main>
+    <script>
+      document.getElementById("logout")?.addEventListener("click", async () => {
+        // Content-Type is required here: body-less POSTs without one fail Astro's origin check.
+        await fetch("/api/auth/logout", { method: "POST", headers: { "content-type": "application/json" } });
+        window.location.href = "/login";
+      });
+    </script>
+  </body>
+</html>

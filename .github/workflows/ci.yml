@@ -1,0 +1,131 @@
+name: CI
+
+# Runs on every pull request and on pushes to main. release.yml reuses it, so images are only
+# published from a commit whose tests pass.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # what the images run
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            api/requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Unit tests
+        working-directory: api
+        run: python -m pytest
+      - name: docs/openapi.json matches the code
+        run: python scripts/export-openapi.py --check
+
+  postgres:
+    name: Postgres tests and migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: grader_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PG_TEST_URL: postgresql+psycopg://postgres:ci@localhost:5432/grader_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            api/requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Migrations apply to an empty database and match the models
+        working-directory: api
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+        run: |
+          alembic upgrade head
+          alembic check
+      - name: Postgres-only tests (foreign keys, row locks, job claiming)
+        working-directory: api
+        run: python -m pytest tests_pg
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+
+  compose:
+    name: Compose and workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker-compose.yml parses, locally built and with published images
+        run: |
+          cp .env.example .env
+          sed -i 's/^CLAUDE_RUNNER_TOKEN=$/CLAUDE_RUNNER_TOKEN=ci-token/' .env
+          docker compose config -q
+          PAPERGRADER_REGISTRY=ghcr.io/example/repo PAPERGRADER_TAG=1.2.3 \
+            docker compose config | grep -q 'image: ghcr.io/example/repo/api:1.2.3'
+      - name: Lint the workflows
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
+
+  images:
+    name: Image builds (${{ matrix.image }})
+    # Catches a broken Dockerfile before merge. Publishing is release.yml's job.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: api, context: ./api, file: ./api/Dockerfile }
+          - { image: web, context: ./web, file: ./web/Dockerfile }
+          - { image: claude, context: ., file: ./claude/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          tags: paper-grader-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

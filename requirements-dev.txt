@@ -1,0 +1,11 @@
+# Everything needed to develop, test and run this repo locally. Install into the repo-local virtualenv:
+#   ./scripts/setup-dev.sh        (or: python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt)
+-r api/requirements.txt
+
+pytest==8.3.*
+
+# Runs the stack with rootless podman, no Docker or system install needed: ./scripts/compose.sh up -d
+podman-compose==1.6.*
+
+# Lints the GitHub Actions workflows offline: .venv/bin/actionlint
+actionlint-py>=1.7
