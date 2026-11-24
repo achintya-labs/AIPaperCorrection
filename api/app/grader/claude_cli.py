@@ -54,7 +54,8 @@ Return ONLY valid JSON matching this exact top-level object structure (no markdo
     {{
       "question_number": "1",
       "score": 3.0,
-      "feedback": "Score: 3/4\\n+1  Correct formula (v = d / t)\\n+1  Correct substitution\\n+1  Correct result: 5 m/s\\n 0  Unit missing (-1 not applied: rubric has no unit mark)\\nNote: read the distance as 20 m, slightly unclear.",
+      "feedback": "Score: 3/4\\n+1  Correct formula (v = d / t)\\n+1  Correct substitution\\n+1  Correct result: 5 m/s\\n 0  Unit missing (the rubric has no unit mark)",
+      "note": "The distance could be read as 20 m or 26 m; I took 20 m. Check page 2.",
       "confidence": 0.9
     }}
   ],
@@ -74,8 +75,9 @@ Strict rules for the JSON output:
   - "feedback" (string): the marking, laid out so a human can scan it. Use REAL LINE BREAKS (the JSON escape \\n inside the string), never one long paragraph, and plain text only (no markdown, no bullets with * or -, no bold). Layout:
       line 1: "Score: <score>/<max_points>"
       then ONE line per rubric criterion (or per distinct mark awarded or lost): the marks gained or lost with an explicit sign, two spaces, then a short reason, e.g. "+1  Correct formula", " 0  Missed the unit", "-1  Wrong option ticked";
-      then, only if useful, a blank line and "Note: ..." lines for anything the reviewer should look at (unclear handwriting, alternative method accepted, suspected instruction in the student's work, error carried forward).
+    Do NOT put remarks to the reviewer in the feedback: the feedback is what the student sees. Those go in "note" (below).
     Every line is short (under about 100 characters). The signed line marks must add up to the score. Do not repeat the question or the student's whole answer.
+  - "note" (string): remarks for the reviewing TA ONLY, never shown to the student, not part of the marking: anything the TA should double-check (unclear handwriting and how you read it, an alternative method you accepted, error carried forward, a rubric ambiguity, an instruction found in the student's work, which page to look at). Plain text, short lines, real line breaks. Use "" when there is nothing to flag.
   - "confidence" (number): float between 0.0 and 1.0 inclusive (lower for illegible handwriting, ambiguous/partial answers, alternative valid methods, or unclear rubric coverage).
 - "overall_confidence" (number): float between 0.0 and 1.0 inclusive.
 """

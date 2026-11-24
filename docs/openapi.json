@@ -307,6 +307,10 @@
             "title": "Ai Feedback",
             "type": "string"
           },
+          "ai_note": {
+            "title": "Ai Note",
+            "type": "string"
+          },
           "ai_score": {
             "anyOf": [
               {
@@ -398,6 +402,7 @@
           "max_points",
           "ai_score",
           "ai_feedback",
+          "ai_note",
           "ai_confidence",
           "final_score",
           "final_feedback",

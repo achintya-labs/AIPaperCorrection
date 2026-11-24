@@ -1,0 +1,120 @@
+{
+  "questions": [
+    {
+      "number": "A.1",
+      "max_points": 2,
+      "text": "Section A, multiple select: which are vector quantities (a velocity, b speed, c force, d energy).",
+      "expected_answer": "KEY: a=T, b=X, c=T, d=X. Velocity and force are vectors; speed and energy are scalars.\nProcedure: an option with neither tick nor cross counts as a cross. Let m = options matching the key.\nm=4 -> +2; m=3 -> +1; m=2 -> 0; m=0 or 1 -> -1 (a real negative mark: record -1).\nA completely blank question is read as all crosses (m=2 -> 0).",
+      "criteria": [
+        {
+          "description": "At least 3 of 4 options match the key (m>=3)",
+          "points": 1
+        },
+        {
+          "description": "All 4 options match the key (m=4)",
+          "points": 1
+        },
+        {
+          "description": "Penalty: m=0 or 1 gives -1 overall instead of the marks above",
+          "points": -1
+        }
+      ]
+    },
+    {
+      "number": "A.2",
+      "max_points": 2,
+      "text": "Section A, multiple select: which are conserved in an elastic collision (a total momentum, b velocity of each body, c direction of each body, d total kinetic energy).",
+      "expected_answer": "KEY: a=T, b=X, c=X, d=T. Total momentum and total kinetic energy are conserved; individual velocities and directions change.\nSame procedure as A.1: blanks count as crosses; m=4 -> +2; m=3 -> +1; m=2 -> 0; m=0 or 1 -> -1 (record -1).\nA completely blank question: all crosses -> m=2 -> 0.",
+      "criteria": [
+        {
+          "description": "At least 3 of 4 options match the key (m>=3)",
+          "points": 1
+        },
+        {
+          "description": "All 4 options match the key (m=4)",
+          "points": 1
+        },
+        {
+          "description": "Penalty: m=0 or 1 gives -1 overall instead of the marks above",
+          "points": -1
+        }
+      ]
+    },
+    {
+      "number": "B.1",
+      "max_points": 3,
+      "text": "Car from rest to 20 m/s in 5 s: acceleration and distance.",
+      "expected_answer": "a = (v - u)/t = 20/5 = 4 m/s^2.  s = 1/2 a t^2 = 1/2 x 4 x 25 = 50 m (or s = (u+v)t/2 = 50 m).\nWhole marks only. Apply error carried forward: a correct distance from the student's own acceleration earns the distance mark.",
+      "criteria": [
+        {
+          "description": "Correct formula for acceleration (a = (v-u)/t) and a = 4 m/s^2",
+          "points": 1
+        },
+        {
+          "description": "Correct formula for distance (s = 1/2 a t^2 or s = (u+v)t/2)",
+          "points": 1
+        },
+        {
+          "description": "Distance = 50 m, with units for both answers",
+          "points": 1
+        }
+      ]
+    },
+    {
+      "number": "B.2",
+      "max_points": 3,
+      "text": "12 V across 4 ohm: current and power.",
+      "expected_answer": "I = V/R = 12/4 = 3 A.  P = V I = 12 x 3 = 36 W (also accepted: I^2 R = 36 W, V^2/R = 36 W).\nWhole marks only. Units are required for the last mark.",
+      "criteria": [
+        {
+          "description": "Uses Ohm's law I = V/R",
+          "points": 1
+        },
+        {
+          "description": "Current = 3 A",
+          "points": 1
+        },
+        {
+          "description": "Power = 36 W with units",
+          "points": 1
+        }
+      ]
+    },
+    {
+      "number": "C.1",
+      "max_points": 4,
+      "text": "Acceleration of a ball at the top of its flight.",
+      "expected_answer": "No. The acceleration is g = 9.8 m/s^2 (about 10 m/s^2) downward throughout the flight, including at the top. Velocity is zero only for an instant while it changes direction; gravity is still acting, so the velocity keeps changing.\n2 marks for stating acceleration is not zero (= g, downward); 2 marks for the explanation (gravity acts, velocity is changing even though it is momentarily zero).",
+      "criteria": [
+        {
+          "description": "States that the acceleration is NOT zero and equals g, directed downward",
+          "points": 2
+        },
+        {
+          "description": "Explains: gravity still acts / velocity is changing direction though momentarily zero",
+          "points": 2
+        }
+      ]
+    },
+    {
+      "number": "C.2",
+      "max_points": 6,
+      "text": "2 kg block from 5 m height, frictionless slope, speed at the bottom.",
+      "expected_answer": "Energy conservation: m g h = 1/2 m v^2, so v = sqrt(2 g h) = sqrt(2 x 10 x 5) = sqrt(100) = 10 m/s. The mass cancels.\n2 marks for the energy-conservation statement (PE at top = KE at bottom); 2 marks for correct rearrangement/substitution; 2 marks for v = 10 m/s with units. Apply error carried forward for arithmetic slips.",
+      "criteria": [
+        {
+          "description": "States potential energy at the top equals kinetic energy at the bottom (m g h = 1/2 m v^2)",
+          "points": 2
+        },
+        {
+          "description": "Correct rearrangement and substitution, v = sqrt(2 g h) with g = 10 and h = 5",
+          "points": 2
+        },
+        {
+          "description": "v = 10 m/s with units",
+          "points": 2
+        }
+      ]
+    }
+  ]
+}

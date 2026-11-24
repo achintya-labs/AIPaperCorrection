@@ -429,7 +429,7 @@ Any, scoped. Everything the review screen needs. **200** → `SubmissionDetail` 
  "grades": [
    {"id": 42, "question_id": 11, "question_number": "1", "question_text": "Average speed?",
     "expected_answer": "5 m/s", "criteria": [{"description": "correct result", "points": 1}], "max_points": 2,
-    "ai_score": 2, "ai_feedback": "Correct.", "ai_confidence": 0.95,
+    "ai_score": 2, "ai_feedback": "Correct.", "ai_note": "", "ai_confidence": 0.95,
     "final_score": null, "final_feedback": null, "status": "pending", "version": 1, "reviewed_by": null}]}
 ```
 
@@ -447,6 +447,9 @@ Any, scoped. Save a TA's decision on one question. Body:
 | `version` | The `version` you read. Required |
 | `final_score` | Number from `-max_points` to `max_points` (negative marking is allowed) |
 | `final_feedback` | Text |
+
+`ai_note` is Claude's remark to the reviewing TA (unclear handwriting, an accepted alternative method, …). It is shown in the
+review screen only: it is not part of the student-facing feedback and is left out of the CSV and PDF exports.
 
 **Approving** Claude's grade = send its `ai_score` and `ai_feedback` unchanged → `status: "reviewed"`. Any other
 values → `"overridden"`. On success `version` increases by 1 and `reviewed_by`/`reviewed_at` are set.

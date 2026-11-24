@@ -231,6 +231,12 @@ export default function Review({ id }: { id: number }) {
                 <div className="small" style={{ margin: ".5rem 0" }}>
                   <strong>Claude:</strong> {fmt(g.ai_score)} pts
                   <div className="multiline claude-feedback">{g.ai_feedback}</div>
+                  {g.ai_note.trim() && (
+                    <div className="reviewer-note" role="note">
+                      <div className="reviewer-note-title">Note for you (not shown to the student)</div>
+                      <div className="multiline">{g.ai_note}</div>
+                    </div>
+                  )}
                 </div>
 
                 <div onClick={(e) => e.stopPropagation()}>

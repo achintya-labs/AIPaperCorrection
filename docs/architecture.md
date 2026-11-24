@@ -142,6 +142,7 @@ erDiagram
         int question_id FK
         float ai_score
         text ai_feedback
+        text ai_note "for the TA only, never exported"
         float ai_confidence
         float final_score "TA, nullable"
         text final_feedback "TA, nullable"

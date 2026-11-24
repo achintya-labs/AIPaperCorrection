@@ -37,6 +37,7 @@ class FakeProvider(GraderProvider):
                     question_number=q.number,
                     score=q.max_points / 2,
                     feedback="Fake grader: half marks.",
+                    note="Reviewer note: produced by the fake grader.",
                     confidence=0.5,
                 )
                 for q in rubric.questions

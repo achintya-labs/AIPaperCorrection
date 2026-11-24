@@ -170,6 +170,7 @@ def process(db: Session, sub: Submission, provider: GraderProvider, storage: Sto
                     question_id=question_ids[q.question_number],
                     ai_score=q.score,
                     ai_feedback=q.feedback,
+                    ai_note=q.note,
                     ai_confidence=q.confidence,
                 )
             )

@@ -41,6 +41,7 @@ class QuestionResult(BaseModel):
     question_number: str
     score: float  # may be negative (negative marking); range is checked against the rubric in check_result
     feedback: str
+    note: str = Field(default="", description="Remarks for the reviewing TA only; not shown to the student")
     confidence: float = Field(
         ge=0, le=1, description="Likelihood that a careful human grader would agree with this score"
     )

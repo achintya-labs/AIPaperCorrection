@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -47,6 +47,14 @@ class RubricOut(BaseModel):
 class ExamIn(BaseModel):
     name: str
     model_override: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Exam name can't be empty")
+        return v
 
 
 class ExamOut(ExamIn):

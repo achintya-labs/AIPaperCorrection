@@ -167,6 +167,9 @@ class Grade(Base):
     # AI output is immutable; TA edits go in final_*.
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_feedback: Mapped[str] = mapped_column(Text, default="")
+    # Claude's remarks for the TA only (unclear handwriting, accepted alternative, ...). Never part of the
+    # student-facing feedback, and never exported.
+    ai_note: Mapped[str] = mapped_column(Text, default="", server_default="")
     ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)

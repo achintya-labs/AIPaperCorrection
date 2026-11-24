@@ -171,3 +171,22 @@ def test_exam_list_follows_assignment_changes(client):
 def uid_of(email):
     with TestSession() as s:
         return s.query(User).filter_by(email=email).one().id
+
+
+def test_exam_rename_keeps_everything_else(client):
+    exam_id = make_exam(client)
+    client.post(f"/exams/{exam_id}/rubrics", json=RUBRIC)
+    r = client.patch(f"/exams/{exam_id}", json={"name": "  Final exam  ", "model_override": "m1"})
+    assert r.status_code == 200 and r.json()["name"] == "Final exam" and r.json()["id"] == exam_id
+    # Same id, same rubric, same exam: the name is only a label.
+    assert client.get(f"/exams/{exam_id}/rubric").json()["version"] == 1
+    assert [e["name"] for e in client.get("/exams").json()] == ["Final exam"]
+    # A second exam may share the name: it is not a key.
+    assert client.post("/exams", json={"name": "Final exam"}).status_code == 201
+
+
+def test_exam_name_cannot_be_blank(client):
+    exam_id = make_exam(client)
+    assert client.patch(f"/exams/{exam_id}", json={"name": "   "}).status_code == 422
+    assert client.post("/exams", json={"name": ""}).status_code == 422
+    assert client.get("/exams").json()[0]["name"] == "Midterm"

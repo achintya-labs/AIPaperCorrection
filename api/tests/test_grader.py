@@ -217,6 +217,15 @@ def test_negative_marks_are_accepted_down_to_minus_max():
     check_result(r, RUBRIC, 2)  # exactly the floor is fine
 
 
+def test_note_is_optional_and_kept_separate_from_feedback():
+    from app.grader.base import QuestionResult
+
+    q = QuestionResult(question_number="1", score=1, feedback="Score: 1/4", confidence=0.5)
+    assert q.note == ""  # models may omit it
+    q = QuestionResult(question_number="1", score=1, feedback="Score: 1/4", note="check page 2", confidence=0.5)
+    assert q.note == "check page 2" and "check page 2" not in q.feedback
+
+
 def test_registry():
     assert set(PROVIDERS) == {"claude_cli", "claude_runner", "anthropic_api", "fake"}
     assert isinstance(get_provider(Settings(grader_provider="fake")), FakeProvider)

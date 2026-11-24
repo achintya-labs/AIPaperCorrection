@@ -21,13 +21,15 @@ export default function ExamAdmin({ id }: { id: number }) {
   const [tab, setTab] = useState<Tab>("rubric");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [name, setName] = useState("");
+  const [nameSaved, setNameSaved] = useState(false);
 
   useEffect(() => {
     api<Exam[]>("/exams")
       .then((list) => {
         const e = list.find((x) => x.id === id);
         if (!e) return setError("Exam not found");
-        setExam(e); setModel(e.model_override ?? "");
+        setExam(e); setModel(e.model_override ?? ""); setName(e.name);
       })
       .catch((e) => setError(errMsg(e)));
   }, [id]);
@@ -38,6 +40,18 @@ export default function ExamAdmin({ id }: { id: number }) {
     try {
       setExam(await api<Exam>(`/exams/${id}`, { method: "PATCH", json: { name: exam.name, model_override: model.trim() || null } }));
       setSaved(true);
+    } catch (e) { setError(errMsg(e)); }
+  }
+
+  async function saveName() {
+    if (!exam) return;
+    const next = name.trim();
+    if (!next) return setError("The exam needs a name");
+    setError(""); setNameSaved(false);
+    try {
+      // PATCH replaces both fields, so send the model override as it is saved, not the unsaved draft.
+      const updated = await api<Exam>(`/exams/${id}`, { method: "PATCH", json: { name: next, model_override: exam.model_override } });
+      setExam(updated); setName(updated.name); setNameSaved(true);
     } catch (e) { setError(errMsg(e)); }
   }
 
@@ -69,6 +83,14 @@ export default function ExamAdmin({ id }: { id: number }) {
       {tab === "papers" && <ExamSubmissions examId={id} />}
       {tab === "advanced" && (
         <div className="stack">
+          <div className="card row" style={{ alignItems: "flex-end" }}>
+            <div className="grow" style={{ maxWidth: 360 }}>
+              <label htmlFor="exam-name">Exam name</label>
+              <input id="exam-name" type="text" value={name} maxLength={255} onChange={(e) => { setName(e.target.value); setNameSaved(false); }} />
+            </div>
+            <button onClick={saveName} disabled={!name.trim() || name.trim() === exam.name}>Save</button>
+            {nameSaved && <span className="small" style={{ color: "var(--ok)" }}>Renamed. Only the label changes; papers, rubric and grades stay as they are.</span>}
+          </div>
           <div className="card row" style={{ alignItems: "flex-end" }}>
             <div className="grow" style={{ maxWidth: 360 }}>
               <label htmlFor="model">Grading model for this exam</label>

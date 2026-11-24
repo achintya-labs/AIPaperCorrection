@@ -254,3 +254,16 @@ def test_sections_group_by_question_number_prefix():
     assert [(s.name, s.score, s.max_points) for s in flat] == [("All questions", 3, 5)]
     mixed = _sections([g("I.1", 0, 2, 2), g("7", 1, 1, 3)])
     assert [s.name for s in mixed] == ["Section I", "Other questions"]
+
+
+def test_reviewer_note_is_visible_to_the_ta_but_never_exported(env):
+    ta = env.as_user("ta@x.io")
+    for g in detail(ta, env.sid)["grades"]:
+        assert g["ai_note"] == "Reviewer note: produced by the fake grader."  # shown in the review screen
+
+    r = ta.get(f"/submissions/{env.sid}/export.pdf")
+    with fitz.open(stream=r.content, filetype="pdf") as doc:
+        assert "Reviewer note" not in "".join(p.get_text() for p in doc)  # not in the student-facing PDF
+
+    csv_text = env.admin.get(f"/exams/{env.exam_id}/export.csv").text
+    assert "Reviewer note" not in csv_text

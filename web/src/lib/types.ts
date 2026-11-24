@@ -45,6 +45,7 @@ export interface Grade {
   max_points: number;
   ai_score: number | null;
   ai_feedback: string;
+  ai_note: string;
   ai_confidence: number | null;
   final_score: number | null;
   final_feedback: string | null;

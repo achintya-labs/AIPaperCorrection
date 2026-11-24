@@ -42,6 +42,7 @@ class GradeOut(BaseModel):
     max_points: float
     ai_score: float | None
     ai_feedback: str
+    ai_note: str
     ai_confidence: float | None
     final_score: float | None
     final_feedback: str | None
@@ -74,6 +75,7 @@ def grade_out(g: Grade) -> GradeOut:
         max_points=q.max_points,
         ai_score=g.ai_score,
         ai_feedback=g.ai_feedback,
+        ai_note=g.ai_note,
         ai_confidence=g.ai_confidence,
         final_score=g.final_score,
         final_feedback=g.final_feedback,

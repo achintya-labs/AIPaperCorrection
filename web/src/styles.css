@@ -288,3 +288,7 @@ input[type="file"]::file-selector-button:hover { border-color: var(--accent); }
 .multiline { white-space: pre-wrap; overflow-wrap: anywhere; }
 .claude-feedback { margin-top: .25rem; padding: .5rem .65rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }
 .grade textarea { min-height: 9rem; }
+
+/* Claude's note to the TA: visible while correcting, never exported */
+.reviewer-note { margin-top: .5rem; padding: .5rem .65rem; background: var(--warn-bg); color: var(--text); border: 1px solid var(--warn); border-radius: 6px; }
+.reviewer-note-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--warn); margin-bottom: .2rem; }
