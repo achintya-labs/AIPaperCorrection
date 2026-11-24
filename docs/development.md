@@ -53,6 +53,7 @@ COMPOSE_RUNTIME=docker ./scripts/compose.sh up -d     # the same, with `docker c
 | API (auth, import, grading, review, deletion, runner, docs drift) | `api/tests` | SQLite, a stand-in `claude` executable | ~8 s |
 | Web unit tests (table search, cross-site request check, import button state, login errors) | `web/src/lib/*.test.ts` | Node's built-in runner | <1 s |
 | Type check and build | `web/` | `astro sync` (generates the `astro:*` types), `tsc`, `astro build` | ~10 s |
+| SQLite mode (`tests/test_sqlite_mode.py`: migrations on a file, WAL/foreign-key pragmas, racing workers) | `api/tests` | a temporary SQLite file | ~2 s |
 | Postgres-only (foreign keys, row locks, job claiming, migrations) | `api/tests_pg` | a real Postgres; skipped unless `PG_TEST_URL` is set | ~2 s |
 
 The API suite is fast because the tests hash passwords at bcrypt's minimum cost (`BCRYPT_ROUNDS=4`, set in
@@ -95,6 +96,7 @@ unanchored `storage/` also hides the `api/app/storage` Python package, which pas
 | **Postgres tests and migrations** | Postgres 16 service: `alembic upgrade head` on an empty database, `alembic check`, then `tests_pg` |
 | **Web** | `npm ci`, unit tests, `astro sync`, type check, build |
 | **Compose and workflows** | `docker compose config` parses with local and with published images; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
+| **Native mode (SQLite, no containers)** | `./run.sh --native --no-claude`: builds the web app, migrates a SQLite file, starts api, worker and web, signs in and creates an exam through the web server |
 | **Image builds** (pull requests only) | Builds the `api`, `web` and `claude` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
 
 ## Publishing images
@@ -122,6 +124,10 @@ The same run also creates a **GitHub Release** with `papergrader-v1.0.0.tar.gz` 
 that pins the registry and version. The Dockerfiles stay in the repository: only CI uses them. A server never builds
 anything. `docker-compose.yml` names the images (`${PAPERGRADER_REGISTRY}/api:${PAPERGRADER_TAG}` and so on), so
 `compose pull` knows exactly what to download.
+
+Each release also attaches `papergrader-native-v1.0.0.tar.gz`: the API source, the **already built** web app, `run.sh`, the
+migrations and the TLS proxy script, with no compose file. It runs without containers (`./run.sh`, see
+[how-it-runs.md](how-it-runs.md#without-containers-native-mode-sqlite)); the machine needs Python 3.10+, Node 20+ and npm once.
 
 ### Running a release on a server
 

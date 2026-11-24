@@ -43,6 +43,47 @@ Open **https://localhost:8443** (self-signed certificate: accept the browser war
 admin. `compose` refuses to start if `CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty, and the `proxy` needs `certs/`.
 See [HTTPS reverse proxy](#https-reverse-proxy) for ports and real certificates.
 
+### Without containers (native mode, SQLite)
+
+For a machine with no root access and no container runtime. Same commands, one flag:
+
+```sh
+./run.sh --native --host grader.example.edu --admin-email me@example.edu   # first run
+./run.sh --native login      # once: sign Claude in (installs the CLI into ./tools if it isn't on PATH)
+./run.sh --native status     # also: logs [api|worker|web|proxy], stop, env
+```
+
+A native release bundle (`papergrader-native-vX.Y.Z.tar.gz`) has no `docker-compose.yml`, so `./run.sh` alone is native.
+
+**What it needs on the machine:** `python3` 3.10+ (with `venv`), `node` 20+ (22 recommended), `npm` once (to install the web
+server's dependencies and the Claude CLI; the bundle ships the built web app), and `openssl` once for the certificate. All of
+it can live in your home directory (pyenv/conda, a Node tarball). **What it creates, all inside the folder:** `.venv/`,
+`data/` (the database and the page storage), `native/` (logs and pid files), `tools/` (the Claude CLI), `certs/`, `.env`.
+
+**How it differs from the container setup**
+
+| | Containers | `--native` |
+|---|---|---|
+| Database | Postgres 16 | **SQLite** file `data/papergrader.db` (WAL mode), or `--db postgres --db-url postgresql+psycopg://...` |
+| Processes | db, api, worker, claude, web, proxy | api, worker, web and a small Node TLS proxy (`proxy/tls-proxy.mjs`), run in the background with pid files |
+| Claude | its own container and login volume | the CLI runs in the worker process (`GRADER_PROVIDER=claude_cli`); the login lives in your `~/.claude` |
+| Job queue | `SELECT ... FOR UPDATE SKIP LOCKED` | one conditional `UPDATE` per claim (SQLite has no row locks), safe with several workers |
+| Foreign keys | always enforced | switched on with a pragma on every connection |
+| Isolation | containers, a read-only runner | **none beyond your user account**: the Claude CLI runs as you |
+
+**Flags (native only):** `--db sqlite|postgres`, `--db-url URL`, `--https` / `--no-https` (plain HTTP on `--port`, default 4321),
+`--listen ADDR`, `--port N`, `--https-port N`, `--no-claude` (use the fake grader, to try the UI without Claude). They are
+remembered in `.env` (`NATIVE_DB`, `NATIVE_HTTPS`, `NATIVE_PORT`, `HTTPS_PORT`), so you pass them once. If the API or web port is
+busy (for example the container stack is running), the next free one is used; a busy HTTPS port stops with a message.
+
+**SQLite limits.** It is meant for one course on one machine: one writer at a time (the API and the worker wait for each
+other, so heavy grading can slow the UI slightly), the data directory must be on a local disk (not NFS), and the
+**backup is a copy of `data/`** (stop first, or copy `papergrader.db` together with its `-wal` file). For many concurrent users
+or more than one machine, use Postgres. Moving from SQLite to Postgres is not automated.
+
+**Without HTTPS.** `--no-https` serves plain HTTP on `127.0.0.1` by default. Put your own TLS proxy in front, set
+`COOKIE_SECURE=true` only then, and `--listen 0.0.0.0` only if you really want it reachable without TLS.
+
 ### Podman
 
 ```sh

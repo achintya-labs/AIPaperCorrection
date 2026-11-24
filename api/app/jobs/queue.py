@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import pdf
 from app.config import Settings
+from app.db import is_sqlite
 from app.grader.base import GraderProvider, PageImage, QuestionSpec, RubricSpec
 from app.models import (
     Exam,
@@ -29,8 +30,29 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _claim_sqlite(db: Session, model, queued, taken, worker_id: str | None):
+    """SQLite has no row locks (FOR UPDATE is ignored), so claim with one conditional UPDATE instead: the WHERE
+    re-checks the status, SQLite runs one writer at a time, so exactly one of several threads or processes wins."""
+    for _ in range(5):  # lost the race for this row: look at the next oldest
+        cand = db.scalar(select(model.id).where(model.status == queued).order_by(model.id).limit(1))
+        if cand is None:
+            return None
+        won = db.execute(
+            update(model)
+            .where(model.id == cand, model.status == queued)
+            .values(status=taken, claimed_at=utcnow(), claimed_by=worker_id, error=None)
+        )
+        db.commit()
+        if won.rowcount == 1:
+            return db.get(model, cand, populate_existing=True)
+    return None
+
+
 def claim_next(db: Session, worker_id: str | None = None) -> Submission | None:
-    """Atomically take the oldest queued job. SKIP LOCKED lets many workers claim concurrently."""
+    """Atomically take the oldest queued job. SKIP LOCKED lets many workers claim concurrently (Postgres);
+    SQLite uses a conditional UPDATE."""
+    if is_sqlite(db.get_bind()):
+        return _claim_sqlite(db, Submission, SubmissionStatus.queued, SubmissionStatus.grading, worker_id)
     sub = db.scalar(
         select(Submission)
         .where(Submission.status == SubmissionStatus.queued)
@@ -193,6 +215,8 @@ def process(db: Session, sub: Submission, provider: GraderProvider, storage: Sto
 
 def claim_next_split(db: Session, worker_id: str | None = None) -> SplitJob | None:
     """Atomically take the oldest queued PDF auto-split job."""
+    if is_sqlite(db.get_bind()):
+        return _claim_sqlite(db, SplitJob, SplitJobStatus.queued, SplitJobStatus.processing, worker_id)
     job = db.scalar(
         select(SplitJob)
         .where(SplitJob.status == SplitJobStatus.queued)

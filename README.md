@@ -12,7 +12,8 @@ claude/   The `claude` container: Claude Code CLI + the Claude login + a small a
 proxy/    nginx.conf for the HTTPS front door (the only service published on the network)
 scripts/  claude-login.sh, make-cert.sh, make-sample-data.py, export-openapi.py, ...
 samples/  A small sample exam (paper, rubric, answer sheets, CSVs) for trying the system
-run.sh    One-command launcher: writes .env, makes a certificate, pulls or builds, starts
+run.sh    One-command launcher: writes .env, makes a certificate, then pulls/builds and starts (containers)
+          or, with --native, runs without containers on SQLite
 docs/     Full documentation (start at docs/README.md)
 ```
 
@@ -40,6 +41,9 @@ cp .env.example .env     # set CLAUDE_RUNNER_TOKEN (openssl rand -hex 32), JWT_S
 Open **https://localhost:8443** (self-signed: the browser warns once) and sign in with the bootstrap admin. Then:
 create an exam → write its rubric → import papers → they are graded by the worker → TAs review from **My queue**.
 Optional: sign-in with Google ([how-it-runs.md](docs/how-it-runs.md#sign-in-with-google)).
+
+**No containers, no root?** `./run.sh --native` runs the same system from Python + Node with a SQLite file
+([details](docs/how-it-runs.md#without-containers-native-mode-sqlite)); add `--no-claude` to try the UI without Claude.
 
 Want something to try? [`samples/`](samples/README.md) has a small exam: question paper, rubric, four handwritten-style
 answer sheets and the CSVs for every import mode (`scripts/make-sample-data.py` regenerates it).

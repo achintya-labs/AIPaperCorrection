@@ -8,7 +8,11 @@ target_metadata = Base.metadata
 
 def run_migrations_online() -> None:
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=connection.dialect.name == "sqlite",  # SQLite can't ALTER most things in place
+        )
         with context.begin_transaction():
             context.run_migrations()
 

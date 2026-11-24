@@ -33,3 +33,8 @@ certs/
 
 # Extras
 EE2003*
+
+# native (no-container) mode: virtualenv, data, logs, pids, locally installed Claude CLI
+/data/
+/native/
+/tools/
