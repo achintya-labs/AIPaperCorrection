@@ -3,6 +3,8 @@ import threading
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, select
 
@@ -62,12 +64,23 @@ def count(model):
         return s.scalar(select(func.count()).select_from(model))
 
 
+def _current_revision() -> str | None:
+    with engine.connect() as conn:
+        return MigrationContext.configure(conn).get_current_revision()
+
+
 def test_the_latest_migration_round_trips():
+    """Whatever the newest migration is: it downgrades one step, upgrades back, and the schema still matches the models."""
     cfg = Config("alembic.ini")
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    assert _current_revision() == head
     command.downgrade(cfg, "-1")
-    assert "position" not in {c["name"] for c in inspect(engine).get_columns("questions")}
-    command.upgrade(cfg, "head")
-    assert "position" in {c["name"] for c in inspect(engine).get_columns("questions")}
+    try:
+        assert _current_revision() != head
+    finally:
+        command.upgrade(cfg, "head")  # always restore, or every later test would run on an older schema
+    assert _current_revision() == head
+    command.check(cfg)  # no drift between the migrations and the models
 
 
 def test_skip_locked_never_hands_one_job_to_two_workers():
