@@ -51,8 +51,8 @@ COMPOSE_RUNTIME=docker ./scripts/compose.sh up -d     # the same, with `docker c
 | Suite | Where | Runs on | Time |
 |---|---|---|---|
 | API (auth, import, grading, review, deletion, runner, docs drift) | `api/tests` | SQLite, a stand-in `claude` executable | ~8 s |
-| Web unit tests (table search, cross-site request check) | `web/src/lib/*.test.ts` | Node's built-in runner | <1 s |
-| Type check and build | `web/` | `tsc`, `astro build` | ~10 s |
+| Web unit tests (table search, cross-site request check, import button state, login errors) | `web/src/lib/*.test.ts` | Node's built-in runner | <1 s |
+| Type check and build | `web/` | `astro sync` (generates the `astro:*` types), `tsc`, `astro build` | ~10 s |
 | Postgres-only (foreign keys, row locks, job claiming, migrations) | `api/tests_pg` | a real Postgres; skipped unless `PG_TEST_URL` is set | ~2 s |
 
 The API suite is fast because the tests hash passwords at bcrypt's minimum cost (`BCRYPT_ROUNDS=4`, set in
@@ -76,6 +76,15 @@ A failing check makes the hook exit non-zero and git refuses the commit. `./scri
 binding, protect `main` on GitHub and require these status checks: **API tests**, **Postgres tests and migrations**,
 **Web**, **Compose and workflows**.
 
+The Postgres suite includes a migration round trip that works for whatever the newest migration is: it undoes one
+step, restores the head and runs `alembic check`. Adding a migration needs no test change.
+
+**Sample data.** `samples/` is a small generated exam (question paper, rubric, four handwritten-style answer sheets, the
+CSVs for each import mode, expected marks in its README). Regenerate with `.venv/bin/python scripts/make-sample-data.py`.
+
+**Gotcha: `.gitignore` and `storage/`.** The runtime-data rules are anchored (`/storage/`, `/api/storage/`) because an
+unanchored `storage/` also hides the `api/app/storage` Python package, which passes locally but fails CI on a fresh clone.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
@@ -84,8 +93,8 @@ binding, protect `main` on GitHub and require these status checks: **API tests**
 |---|---|
 | **API tests** | `pytest` on Python 3.12, and `docs/openapi.json` matches the code |
 | **Postgres tests and migrations** | Postgres 16 service: `alembic upgrade head` on an empty database, `alembic check`, then `tests_pg` |
-| **Web** | `npm ci`, unit tests, type check, build |
-| **Compose and workflows** | `docker compose config` parses with local and with published images; `actionlint` on the workflows |
+| **Web** | `npm ci`, unit tests, `astro sync`, type check, build |
+| **Compose and workflows** | `docker compose config` parses with local and with published images; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
 | **Image builds** (pull requests only) | Builds the `api`, `web` and `claude` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
 
 ## Publishing images

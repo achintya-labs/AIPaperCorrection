@@ -11,15 +11,17 @@ separately so the AI's original output is always kept.
 
 ```mermaid
 flowchart LR
-    U["Browser<br/>TA or admin"] -->|"HTTP :4321"| WEB
+    U["Browser<br/>TA or admin"] -->|"HTTPS :8443"| PX
 
     subgraph stack["Compose project: one host"]
+        PX["proxy<br/>nginx, TLS termination<br/>certs/tls.crt + tls.key"]
         WEB["web<br/>Astro server + React islands<br/>proxies /api/*"]
         API["api<br/>FastAPI"]
         WRK["worker<br/>same image as api<br/>python -m app.jobs.worker"]
         CLD["claude<br/>runner + Claude Code CLI<br/>port 9000, internal only"]
         DB[("db<br/>Postgres 16")]
 
+        PX -->|"HTTP, Host and X-Forwarded-* set"| WEB
         WEB -->|"/api/* proxied"| API
         API --> DB
         WRK --> DB
@@ -209,7 +211,10 @@ Uniqueness: one submission per `(exam, student)`, one grade per `(submission, qu
 ```mermaid
 flowchart TB
     subgraph pub["Reachable by users"]
-        W["web :4321"]
+        X["proxy :8443 (HTTPS)"]
+    end
+    subgraph local["This machine only (127.0.0.1)"]
+        W["web :4321 (HTTP)"]
     end
     subgraph priv["Private network"]
         A["api"]
@@ -223,6 +228,7 @@ flowchart TB
         S3["CLAUDE_RUNNER_TOKEN -> api, worker, claude"]
         S4["Claude login / API key / OAuth token -> claude only"]
     end
+    X --> W
     W --> A
     A --> D
     K --> D
@@ -230,8 +236,11 @@ flowchart TB
     A --> C
 ```
 
-- Only `web` is meant to be exposed. `api` is published on `127.0.0.1:8000` for development only; `claude` has
-  no published port.
+- Only the **`proxy`** (nginx, HTTPS) is published on the network. `web` (`127.0.0.1:4321`) and `api`
+  (`127.0.0.1:8000`) are bound to loopback for development only; `claude` has no published port.
+- **Sign-in:** password, and optionally Google (OpenID Connect, authorization code + PKCE). Google only identifies
+  someone who already has an account; it never creates one. A user with no password (blank, set by an admin) can only
+  use Google.
 - Student work is sent to Anthropic (via Claude) for grading. Telemetry, if enabled, exports usage metrics
   but not prompt text.
 - Untrusted input surfaces: uploaded PDFs/CSV (validated, size-limited, never used as file paths), page

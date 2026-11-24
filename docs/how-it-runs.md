@@ -12,6 +12,20 @@ For the design see [architecture.md](architecture.md); for the diagrams of each 
 
 ## Start it
 
+**Easiest: `run.sh`.** It needs only Docker or rootless Podman. In a release bundle it pulls the published images; in a
+git checkout it builds them.
+
+```sh
+./run.sh --host grader.example.edu --admin-email me@example.edu   # first run: .env + certificate + start
+./run.sh login        # once: sign Claude in
+./run.sh status       # also: logs [service], stop, down, pull
+```
+
+The first run writes `.env` (mode 600) with fresh `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and a random
+first-admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and makes a
+self-signed certificate. It never overwrites an existing `.env` or certificate. Everything below is the same thing
+done by hand.
+
 ```sh
 cp .env.example .env
 # edit .env:
@@ -20,12 +34,14 @@ cp .env.example .env
 #   BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD
 #   ALLOWED_HOSTS        the hostname users will browse to (see below)
 ./scripts/setup-dev.sh             # once: repo-local .venv (podman-compose, pytest), web deps, commit hook
+./scripts/make-cert.sh             # self-signed certificate for the HTTPS proxy (certs/ is not in git)
 ./scripts/compose.sh up --build -d # podman-compose from this repo; or: docker compose -p papergrader up --build -d
 ./scripts/claude-login.sh          # once: sign Claude in
 ```
 
-Open http://localhost:4321 and sign in as the bootstrap admin. `compose` refuses to start if
-`CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty.
+Open **https://localhost:8443** (self-signed certificate: accept the browser warning) and sign in as the bootstrap
+admin. `compose` refuses to start if `CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty, and the `proxy` needs `certs/`.
+See [HTTPS reverse proxy](#https-reverse-proxy) for ports and real certificates.
 
 ### Podman
 
@@ -217,17 +233,41 @@ Admins manage accounts on the **Users** page (or `PATCH`/`DELETE /auth/users/{id
 - You can't demote, deactivate or delete **yourself**, and the last active admin is protected. To hand over, promote
   someone else first.
 
-**Passwords.** Everyone can change their own from the **Account** page (click your email in the top bar): it needs
+**Passwords.** Everyone can change their own from the **Account** page (click your name in the top bar): it needs
 the current password, and signs out all your other sessions while keeping this one. Admins can reset someone else's
 from the Users page (**Reset password**, with a **Generate** button for a strong random one shown once). A reset signs
-that person out everywhere. Rules everywhere: 8 or more characters, at most 72 bytes. An admin can't reset their *own*
-password this way; they use the Account page like anyone else. There is no email-based "forgot password": the admin
-resets it, and if the *only* admin forgets theirs, run this in the `api` container:
+that person out everywhere. Rules everywhere: 8 or more characters, at most 72 bytes. There is no email-based
+"forgot password": the admin resets it, and if the *only* admin forgets theirs, run this in the `api` container:
+
+**Google-only accounts.** An admin may leave the password **blank** when creating a user or resetting *someone else's*
+password. That account then has no password (the Users page shows a **Google only** badge) and can sign in only with
+[Google](#sign-in-with-google). A blank password never signs anyone in, and nobody can blank their **own** password. To
+let a Google-only user use a password again, reset it to a real one.
 
 ```sh
 docker compose exec api python -c "from app.db import SessionLocal; from app.models import User; from app.auth import hash_password; \
 s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.password_hash=hash_password('a-new-password'); u.token_version+=1; s.commit()"
 ```
+
+### Exams, rubrics, grading and exports
+
+- **Rename an exam** on its **Advanced** tab. The name is only a label (everything refers to the exam by id), so papers,
+  rubric and grades are unaffected and exports pick up the new name immediately.
+- **Rubric JSON** can be imported on the Rubric tab (`{"questions": [...]}`, see [api.md](api.md#post-examsexam_idrubrics)).
+  A rubric is saved as a new version; papers graded earlier keep the version they used, so **regrade them after
+  importing a corrected rubric**. `samples/rubric.json` is a working example.
+- **Negative marking.** Scores and criterion points may be negative. A score can range from minus the question's maximum
+  to the maximum. Claude is told to go below 0 only where the rubric says so, and TAs can enter negative scores too.
+- **Claude's feedback layout.** The marking comes back as `Score: x/max`, then one signed line per criterion
+  (`+1  Correct formula`, ` 0  Missed the unit`, `-1  Wrong option`). Line breaks are kept on screen and in exports.
+- **Reviewer notes.** Claude can add a separate **note** per question (unclear handwriting, an accepted alternative
+  method, an instruction hidden in the student's work). TAs see it in a highlighted box while reviewing. It is *not*
+  part of the student-facing feedback and is never exported.
+- **PDF export** (one paper, or all as a ZIP): each page is widened to carry the question comments in the margin, and a
+  **marks summary page** is inserted first, the same size as the pages after it: exam name, student, total marks
+  obtained out of the maximum, and a breakdown per section. A section is the part of the question number before the
+  first `.` (`II.3` is in Section II). It says so when some marks are still Claude's unreviewed suggestions.
+- **People are shown as name first, email below** in the top bar, TA pickers and the papers and queue tables.
 
 ### Scaling and throughput
 

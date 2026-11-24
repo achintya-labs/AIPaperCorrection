@@ -11,7 +11,7 @@ regenerated with `python scripts/export-openapi.py`. The running API also serves
 
 ## Conventions
 
-**Base URL.** Browsers use `/api/...` on the web service (`http://localhost:4321/api`), which proxies to the API
+**Base URL.** Browsers use `/api/...` on the web service (`https://localhost:8443/api` through the HTTPS proxy, or `http://localhost:4321/api` on the host itself), which proxies to the API
 with the prefix removed. For scripts in development the API is published on `http://127.0.0.1:8000`; the
 examples below use that, with `API=http://127.0.0.1:8000`. In production only the web service should be
 exposed, so use `https://your-host/api` and add two things the proxy's CSRF check wants on non-GET requests:

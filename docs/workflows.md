@@ -224,6 +224,10 @@ Design points:
 - **Retries are for bad output, not for infrastructure.** Schema or consistency problems are retryable and
   the reason is fed back to the model; timeouts, non-zero exits and `is_error` results fail immediately.
 - **No open transaction during the model call**, which can take minutes.
+- **Negative marking is allowed.** A question's score may be between minus `max_points` and `max_points`; the check
+  in `check_result` rejects anything outside that, and a retryable rejection is fed back to the model.
+- **Feedback and reviewer note are separate.** `feedback` is the layout the student sees; the optional `note` (stored as
+  `ai_note`) is for the TA only and is never exported.
 - **AI output is never overwritten by TAs**: it lands in `ai_*` columns; TA edits go to `final_*`.
 - A regrade deletes the old `Page`/`Grade` rows and writes new ones; `GradingRun` rows accumulate as history.
 
