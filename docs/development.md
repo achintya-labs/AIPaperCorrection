@@ -99,12 +99,33 @@ and pushes `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
 | `ghcr.io/<owner>/<repo>/web` | `web/Dockerfile` | Hostnames are configured at runtime (`ALLOWED_HOSTS`), nothing is baked in |
 | `ghcr.io/<owner>/<repo>/claude` | `claude/Dockerfile` | Contains the Claude Code CLI, installed unpinned |
 
-| Trigger | Tags |
-|---|---|
-| push to `main` | `edge`, `sha-<commit>` |
-| tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest`, `sha-<commit>` |
+Publishing happens **only when you push a tag that starts with `v`**. Nothing is published from branches or pull requests.
 
-To release: `git tag v1.0.0 && git push origin v1.0.0`.
+| Tag you push | Image tags |
+|---|---|
+| `v1.2.3` | `1.2.3`, `1.2`, `v1.2.3`, `latest` |
+| any other `v*` (for example `v2-beta`) | the tag itself, and `latest` |
+
+To release: `git tag v1.0.0 && git push origin v1.0.0`. CI runs first; if it fails nothing is published.
+
+The same run also creates a **GitHub Release** with `papergrader-v1.0.0.tar.gz` attached. It holds `run.sh`,
+`docker-compose.yml`, `.env.example`, `proxy/nginx.conf`, the certificate and Claude-login scripts, and a `release.env`
+that pins the registry and version. The Dockerfiles stay in the repository: only CI uses them. A server never builds
+anything. `docker-compose.yml` names the images (`${PAPERGRADER_REGISTRY}/api:${PAPERGRADER_TAG}` and so on), so
+`compose pull` knows exactly what to download.
+
+### Running a release on a server
+
+```sh
+tar xzf papergrader-v1.0.0.tar.gz && cd papergrader-v1.0.0
+./run.sh --host grader.example.edu --admin-email me@example.edu   # first run: writes .env, makes a certificate, pulls, starts
+./run.sh login                                                    # sign Claude in once
+```
+
+`run.sh` needs only Docker or rootless Podman. It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and the
+first admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and never overwrites an
+existing `.env` or certificate. Other commands: `status`, `logs [service]`, `stop`, `down`, `pull`. In a git checkout
+(no `release.env`) it builds the images locally instead.
 
 ### Running the published images
 
@@ -112,7 +133,7 @@ The compose file builds locally by default. Point it at the registry instead:
 
 ```sh
 export PAPERGRADER_REGISTRY=ghcr.io/<owner>/<repo>   # lower-case
-export PAPERGRADER_TAG=1.0.0
+export PAPERGRADER_TAG=1.0.0    # (run.sh does this for you from release.env)
 docker compose pull && docker compose up -d --no-build
 ```
 

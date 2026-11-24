@@ -26,7 +26,7 @@ test-api:
 	cd api && $(CURDIR)/.venv/bin/python -m pytest
 
 test-web:
-	cd web && npm test && npx tsc --noEmit
+	cd web && npm test && npx astro sync && npx tsc --noEmit
 
 test-pg:
 	./scripts/test-postgres.sh

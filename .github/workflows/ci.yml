@@ -86,6 +86,8 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm test
+      - name: Generate Astro types (astro:* modules, .astro/types.d.ts)
+        run: npx astro sync
       - name: Type check
         run: npx tsc --noEmit
       - name: Build
@@ -103,6 +105,8 @@ jobs:
           docker compose config -q
           PAPERGRADER_REGISTRY=ghcr.io/example/repo PAPERGRADER_TAG=1.2.3 \
             docker compose config | grep -q 'image: ghcr.io/example/repo/api:1.2.3'
+      - name: Shell scripts parse
+        run: for f in run.sh scripts/*.sh; do sh -n "$f"; done
       - name: Lint the workflows
         run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
 

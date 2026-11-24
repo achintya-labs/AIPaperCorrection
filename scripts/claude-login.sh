@@ -21,7 +21,8 @@ run() { $COMPOSE run --rm "$@"; }
 
 case "${1:-login}" in
   login)
-    $COMPOSE build claude
+    # A release bundle (release.env) has no Dockerfiles: it runs the published image, which was already pulled.
+    [ -f release.env ] || $COMPOSE build claude
     echo
     echo "Follow the prompts: open the printed URL in your browser, sign in, and paste the code back here."
     echo

@@ -30,7 +30,7 @@ if touches '^web/'; then
   echo "==> web unit tests"
   (cd web && npm test --silent)
   echo "==> web type check"
-  (cd web && npx --no-install tsc --noEmit)
+  (cd web && npx --no-install astro sync >/dev/null && npx --no-install tsc --noEmit)
   ran=1
 fi
 if touches '^\.github/workflows/'; then

@@ -24,8 +24,10 @@ dist/
 # TLS certificate and key for the reverse proxy
 certs/
 
-# runtime data
-storage/
+# runtime data (anchored: an unanchored "storage/" also hid the api/app/storage Python package from git,
+# which broke CI with "No module named app.storage")
+/storage/
+/api/storage/
 *.db
 *.sqlite3
 

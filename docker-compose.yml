@@ -124,8 +124,6 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-1000}
       OTEL_LOGS_EXPORT_INTERVAL: ${OTEL_LOGS_EXPORT_INTERVAL:-1000}
       CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS: ${CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS:-5000}
-    volumes:
-      - claude-home:/home/claude
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]

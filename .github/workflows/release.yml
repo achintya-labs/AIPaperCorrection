@@ -1,13 +1,14 @@
 name: Release
 
-# main        -> images tagged  edge  and  sha-<commit>
-# vX.Y.Z tag  -> images tagged  X.Y.Z, X.Y and latest
+# Runs ONLY when a tag starting with "v" is pushed (git tag v1.2.3 && git push origin v1.2.3).
+# Nothing is published from branches or pull requests.
+#   v1.2.3  ->  images tagged 1.2.3, 1.2 and latest   (any other v* tag gets its own name as the tag)
 # Images: ghcr.io/<owner>/<repo>/{api,web,claude}. The worker runs the api image.
+# Also attaches papergrader-<tag>.tar.gz to the GitHub Release: docker-compose.yml, run.sh and what they need,
+# pinned to this version, so a machine without this repository can run it.
 on:
   push:
-    branches: [main]
-    tags: ["v*.*.*"]
-  workflow_dispatch:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -55,9 +56,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=edge,branch=main
-            type=sha
+            type=ref,event=tag
+            type=raw,value=latest
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -67,5 +67,32 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  bundle:
+    name: Release bundle
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release and attach the bundle
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the bundle
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          dir="papergrader-$TAG"
+          mkdir -p "$dir/scripts" "$dir/proxy"
+          cp run.sh docker-compose.yml .env.example "$dir/"
+          cp proxy/nginx.conf "$dir/proxy/"
+          cp scripts/make-cert.sh scripts/claude-login.sh "$dir/scripts/"
+          # Pins run.sh to these images: with release.env present it pulls instead of building.
+          repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          printf 'PAPERGRADER_REGISTRY=ghcr.io/%s\nPAPERGRADER_TAG=%s\n' "$repo" "${TAG#v}" > "$dir/release.env"
+          tar -czf "$dir.tar.gz" "$dir"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" "papergrader-$TAG.tar.gz" --title "$TAG" --generate-notes
