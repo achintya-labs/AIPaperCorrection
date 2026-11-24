@@ -21,7 +21,13 @@ node_modules/
 dist/
 .astro/
 
+# TLS certificate and key for the reverse proxy
+certs/
+
 # runtime data
 storage/
 *.db
 *.sqlite3
+
+# Extras
+EE2003*

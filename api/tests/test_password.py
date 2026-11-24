@@ -116,12 +116,19 @@ def test_reset_rules(client):
     ta = signed_in("ta@x.io")
     assert ta.put(f"/auth/users/{uid('admin@x.io')}/password", json={"password": NEW}).status_code == 403
     login(client, "admin@x.io")
-    me = uid("admin@x.io")
-    r = client.put(f"/auth/users/{me}/password", json={"password": NEW})
-    assert r.status_code == 409 and "Change password" in r.json()["detail"]  # use the self-service route
     assert client.put("/auth/users/9999/password", json={"password": NEW}).status_code == 404
     assert client.put(f"/auth/users/{uid('ta@x.io')}/password", json={"password": "short"}).status_code == 422
     assert login(TestClient(app), "ta@x.io", "pw").status_code == 200  # a rejected reset changes nothing
+
+
+def test_admin_resets_own_password_directly(client):
+    other_admin = signed_in("admin@x.io")
+    login(client, "admin@x.io")
+    me = uid("admin@x.io")
+    assert client.put(f"/auth/users/{me}/password", json={"password": NEW}).status_code == 204
+    assert client.get("/auth/users").status_code == 200  # current session stays signed in
+    assert other_admin.get("/auth/me").status_code == 401  # other sessions are signed out
+    assert login(TestClient(app), "admin@x.io", NEW).status_code == 200
 
 
 def test_admin_can_change_their_own_password_the_normal_way(client):
@@ -139,3 +146,47 @@ def test_new_accounts_must_meet_the_same_policy(client):
     assert client.post("/auth/users", json={"email": "n@x.io", "password": "short"}).status_code == 422
     assert client.post("/auth/users", json={"email": "n@x.io", "password": "x" * 73}).status_code == 422
     assert client.post("/auth/users", json={"email": "n@x.io", "password": "long-enough-pw"}).status_code == 201
+
+
+# ---- blank password = Google-only account ----
+
+
+def test_admin_can_create_a_user_without_a_password(client):
+    login(client, "admin@x.io")
+    r = client.post("/auth/users", json={"email": "g@x.io", "password": ""})
+    assert r.status_code == 201
+    row = next(u for u in client.get("/auth/users").json() if u["email"] == "g@x.io")
+    assert row["has_password"] is False
+    assert next(u for u in client.get("/auth/users").json() if u["email"] == "ta@x.io")["has_password"] is True
+
+
+def test_blank_password_never_signs_in(client):
+    login(client, "admin@x.io")
+    client.post("/auth/users", json={"email": "g@x.io", "password": ""})
+    c = TestClient(app)
+    assert login(c, "g@x.io", "").status_code == 401  # the passwordless account
+    assert login(c, "ta@x.io", "").status_code == 401  # an account that does have a password
+    assert c.get("/auth/me").status_code == 401
+
+
+def test_admin_can_blank_another_users_password_and_it_signs_them_out(client):
+    ta = signed_in("ta@x.io")
+    login(client, "admin@x.io")
+    assert client.put(f"/auth/users/{uid('ta@x.io')}/password", json={"password": ""}).status_code == 204
+    assert ta.get("/auth/me").status_code == 401
+    assert login(TestClient(app), "ta@x.io", "pw").status_code == 401
+    assert login(TestClient(app), "ta@x.io", "").status_code == 401
+
+
+def test_nobody_can_blank_their_own_password(client):
+    login(client, "admin@x.io")
+    me = uid("admin@x.io")
+    assert client.put(f"/auth/users/{me}/password", json={"password": ""}).status_code == 422  # direct reset
+    assert change(client, new="").status_code == 422  # normal change
+    assert login(TestClient(app), "admin@x.io", "pw").status_code == 200  # unchanged
+
+
+def test_non_blank_passwords_still_follow_the_policy(client):
+    login(client, "admin@x.io")
+    assert client.post("/auth/users", json={"email": "s@x.io", "password": "short"}).status_code == 422
+    assert client.put(f"/auth/users/{uid('ta@x.io')}/password", json={"password": "short"}).status_code == 422

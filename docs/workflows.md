@@ -198,7 +198,7 @@ sequenceDiagram
         C-->>R: JSON envelope on stdout
         R-->>P: returncode, stdout, stderr
         P->>P: parse structured_output, check schema
-        P->>P: check_result: every page once, known questions, score within max
+        P->>P: check_result: every page once, known questions, score within -max and max
         alt result accepted
             P-->>W: GradingOutcome
         else invalid output, retryable
@@ -269,7 +269,7 @@ flowchart TD
     V -- no --> N["404, same answer for missing and not yours"]
     V -- yes --> S{"Submission is<br/>ready_for_review or reviewed?"}
     S -- no --> C1["409 cannot be reviewed yet"]
-    S -- yes --> M{"score within 0 and max_points?"}
+    S -- yes --> M{"score within -max_points and max_points?"}
     M -- no --> U["422"]
     M -- yes --> Q{"version matches?"}
     Q -- no --> C2["409 with current grade"]
@@ -319,6 +319,33 @@ sequenceDiagram
     D-->>A: rows
     A-->>W: JSON
     W-->>B: same status, headers and body
+```
+
+### Sign in with Google
+
+Optional (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL`). It only signs in users an admin already created.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant A as api (via web proxy)
+    participant G as Google
+
+    B->>A: GET /api/auth/google/login
+    A-->>B: 302 to Google + oauth_tx cookie (state, nonce, PKCE verifier)
+    B->>G: sign in, consent
+    G-->>B: 302 /api/auth/google/callback?code&state
+    B->>A: callback with oauth_tx cookie
+    A->>A: state matches cookie?
+    A->>G: exchange code + PKCE verifier + client secret
+    G-->>A: id_token
+    A->>A: verify signature, iss, aud, exp, nonce, email_verified
+    alt active user with that email
+        A-->>B: 302 / and session cookie
+    else unknown, inactive or any check failed
+        A-->>B: 302 /login?error=google_*
+    end
 ```
 
 Authentication facts:

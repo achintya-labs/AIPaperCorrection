@@ -28,15 +28,22 @@ def run_once(
     session_factory=SessionLocal,
     wid: str | None = None,
 ) -> bool:
-    """Claim and process a single job. Returns False if the queue was empty."""
+    """Claim and process a single job (grading or PDF auto-split). Returns False if both queues were empty."""
+    wid_val = wid or worker_id()
     with session_factory() as db:
-        sub = queue.claim_next(db, wid or worker_id())
-        if sub is None:
-            return False
-        log.info("grading submission %s", sub.id)
-        queue.process(db, sub, provider, storage, settings)
-        log.info("submission %s -> %s", sub.id, sub.status.value)
-        return True
+        sub = queue.claim_next(db, wid_val)
+        if sub is not None:
+            log.info("grading submission %s", sub.id)
+            queue.process(db, sub, provider, storage, settings)
+            log.info("submission %s -> %s", sub.id, sub.status.value)
+            return True
+        split_job = queue.claim_next_split(db, wid_val)
+        if split_job is not None:
+            log.info("splitting PDF job %s (exam %s)", split_job.id, split_job.exam_id)
+            queue.process_split(db, split_job, provider, storage, settings)
+            log.info("split job %s -> %s", split_job.id, split_job.status.value)
+            return True
+        return False
 
 
 def _loop(stop: threading.Event, step: Callable[[], bool], poll: float) -> None:

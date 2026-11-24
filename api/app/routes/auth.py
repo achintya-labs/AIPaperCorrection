@@ -1,6 +1,9 @@
+import logging
+import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import AfterValidator, BaseModel
 from pydantic_core import PydanticCustomError
 from sqlalchemy import delete, func, select, update
@@ -14,10 +17,13 @@ from app.auth import (
     set_session_cookie,
     verify_password,
 )
+from app.auth import google
+from app.config import get_settings
 from app.db import get_db
 from app.models import Grade, Role, User, submission_tas
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 
 MIN_PASSWORD_CHARS = 8
 # bcrypt ignores everything past 72 bytes. Reject longer passwords rather than silently truncating.
@@ -33,6 +39,15 @@ def _check_password_policy(value: str) -> str:
 
 
 NewPassword = Annotated[str, AfterValidator(_check_password_policy)]
+
+
+def _blank_or_policy(value: str) -> str:
+    return value if value == "" else _check_password_policy(value)
+
+
+# An admin may leave a password blank when creating or resetting ANOTHER user: that account then has no password
+# and can sign in only with Google. Changing your own password (and resetting your own) never allows blank.
+BlankOrNewPassword = Annotated[str, AfterValidator(_blank_or_policy)]
 
 
 class LoginIn(BaseModel):
@@ -53,6 +68,7 @@ class UserAdminOut(UserOut):
     """What admins see when managing users: includes activity so deletion can be an informed choice."""
 
     active: bool
+    has_password: bool  # false: Google sign-in only
     assigned_papers: int
     reviewed_grades: int
 
@@ -65,7 +81,7 @@ class UserUpdate(BaseModel):
 class UserCreate(BaseModel):
     email: str
     name: str = ""
-    password: NewPassword
+    password: BlankOrNewPassword
     role: Role = Role.ta
 
 
@@ -75,16 +91,87 @@ class PasswordChange(BaseModel):
 
 
 class PasswordReset(BaseModel):
-    password: NewPassword
+    password: BlankOrNewPassword
 
 
 @router.post("/login", response_model=UserOut)
 def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == body.email))
-    if not user or not user.active or not verify_password(body.password, user.password_hash):
+    # A blank password never signs anyone in, even if the account has none set (those use Google).
+    if not body.password or not user or not user.active or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     set_session_cookie(response, user)
     return user
+
+
+class ProvidersOut(BaseModel):
+    google: bool
+
+
+@router.get("/providers", response_model=ProvidersOut)
+def providers():
+    """Which sign-in methods are configured, so the login page knows whether to show the Google button."""
+    return ProvidersOut(google=google.enabled())
+
+
+def _require_google() -> None:
+    if not google.enabled():
+        raise HTTPException(404, "Google sign-in is not configured")
+
+
+@router.get("/google/login", status_code=302)
+def google_login():
+    """Start Google sign-in: sets a short-lived signed cookie and redirects to Google."""
+    _require_google()
+    url, tx = google.start()
+    resp = RedirectResponse(url, status_code=302)
+    resp.set_cookie(
+        google.TX_COOKIE, tx, max_age=google.TX_MAX_AGE, httponly=True, samesite="lax",
+        secure=get_settings().cookie_secure, path="/",
+    )
+    return resp
+
+
+@router.get("/google/callback", status_code=302)
+def google_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    tx_cookie: str | None = Cookie(default=None, alias=google.TX_COOKIE),
+    db: Session = Depends(get_db),
+):
+    """Google redirects here. Signs in the existing, active user whose email Google has verified.
+    Every failure redirects to /login?error=... with a generic code (no hint whether an account exists)."""
+    _require_google()
+
+    def fail(code_: str) -> RedirectResponse:
+        r = RedirectResponse(f"/login?error={code_}", status_code=302)
+        r.delete_cookie(google.TX_COOKIE, path="/")
+        return r
+
+    if error or not code or not state:
+        return fail("google_cancelled" if error == "access_denied" else "google_failed")
+    try:
+        tx = google.read_transaction(tx_cookie)
+        if not secrets.compare_digest(state, str(tx["state"])):
+            raise google.GoogleAuthError("state mismatch")
+        claims = google.complete(code, tx)
+    except google.GoogleAuthError as e:
+        log.warning("google sign-in rejected: %s", e)
+        return fail("google_failed")
+
+    matches = db.scalars(select(User).where(func.lower(User.email) == claims["email"].lower())).all()
+    user = matches[0] if len(matches) == 1 else None  # ambiguous case-variants: refuse rather than guess
+    if not user or not user.active:
+        log.warning("google sign-in for unknown or inactive account")
+        return fail("google_not_allowed")
+    if not user.name and claims.get("name"):
+        user.name = str(claims["name"])[:255]
+        db.commit()
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie(google.TX_COOKIE, path="/")
+    set_session_cookie(resp, user)
+    return resp
 
 
 @router.post("/logout", status_code=204)
@@ -154,6 +241,7 @@ def _admin_out(db: Session, users: list[User]) -> list[UserAdminOut]:
             name=u.name,
             role=u.role,
             active=u.active,
+            has_password=bool(u.password_hash),
             assigned_papers=assigned.get(u.id, 0),
             reviewed_grades=reviewed.get(u.id, 0),
         )
@@ -170,20 +258,22 @@ def list_users(db: Session = Depends(get_db)):
 def reset_user_password(
     user_id: int,
     body: PasswordReset,
+    response: Response,
     me: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin sets another user's password (e.g. they forgot it, or the account may be compromised).
-    All of that user's sessions are signed out. For your own account use PUT /auth/me/password, which
-    needs the current password, so a hijacked admin session can't quietly take the account over."""
+    """Admin sets a user's password directly without requiring the current password.
+    All other sessions of that user are signed out; if resetting your own, this session stays signed in."""
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404, "User not found")
-    if user.id == me.id:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Use Change password for your own account")
+    if body.password == "" and user.id == me.id:
+        raise HTTPException(422, "You can't remove your own password")
     user.password_hash = hash_password(body.password)
     user.token_version += 1
     db.commit()
+    if user.id == me.id:
+        set_session_cookie(response, user)
 
 
 def _guard_last_admin(db: Session, target: User) -> None:

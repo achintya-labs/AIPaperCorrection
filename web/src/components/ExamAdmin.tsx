@@ -7,8 +7,13 @@ import ExamSubmissions from "./ExamSubmissions";
 import ImportWizard from "./ImportWizard";
 import RubricEditor from "./RubricEditor";
 
-type Tab = "rubric" | "import" | "papers";
-const TABS: [Tab, string][] = [["rubric", "Rubric"], ["import", "Import"], ["papers", "Papers"]];
+type Tab = "rubric" | "import" | "papers" | "advanced";
+const TABS: [Tab, string][] = [
+  ["rubric", "Rubric"],
+  ["import", "Import"],
+  ["papers", "Papers"],
+  ["advanced", "Advanced"],
+];
 
 export default function ExamAdmin({ id }: { id: number }) {
   const [exam, setExam] = useState<Exam | null>(null);
@@ -40,7 +45,7 @@ export default function ExamAdmin({ id }: { id: number }) {
     if (!exam) return;
     setError("");
     try {
-      if (await deleteExamFlow(exam)) window.location.href = "/admin";
+      if (await deleteExamFlow(exam)) window.location.href = "/admin/exams";
     } catch (e) { setError(errMsg(e)); }
   }
 
@@ -49,22 +54,11 @@ export default function ExamAdmin({ id }: { id: number }) {
 
   return (
     <div className="stack">
-      <div className="row between">
-        <div>
-          <a href="/admin" className="small">← Exams</a>
-          <h1 style={{ margin: ".25rem 0 0" }}>{exam.name}</h1>
-        </div>
-        <button className="danger" onClick={removeExam}>Delete exam</button>
+      <div>
+        <a href="/admin/exams" className="small">← Exams</a>
+        <h1 style={{ margin: ".25rem 0 0" }}>{exam.name}</h1>
       </div>
       {error && <Alert tone="bad">{error}</Alert>}
-      <div className="card row" style={{ alignItems: "flex-end" }}>
-        <div className="grow" style={{ maxWidth: 360 }}>
-          <label htmlFor="model">Grading model for this exam</label>
-          <input id="model" type="text" className="mono" value={model} placeholder="Server default" onChange={(e) => { setModel(e.target.value); setSaved(false); }} />
-        </div>
-        <button onClick={saveModel} disabled={(exam.model_override ?? "") === model.trim()}>Save</button>
-        {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved. Applies to papers graded from now on.</span>}
-      </div>
       <div className="tabs" role="tablist">
         {TABS.map(([key, label]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
@@ -73,6 +67,25 @@ export default function ExamAdmin({ id }: { id: number }) {
       {tab === "rubric" && <RubricEditor examId={id} />}
       {tab === "import" && <ImportWizard examId={id} />}
       {tab === "papers" && <ExamSubmissions examId={id} />}
+      {tab === "advanced" && (
+        <div className="stack">
+          <div className="card row" style={{ alignItems: "flex-end" }}>
+            <div className="grow" style={{ maxWidth: 360 }}>
+              <label htmlFor="model">Grading model for this exam</label>
+              <input id="model" type="text" className="mono" value={model} placeholder="Server default" onChange={(e) => { setModel(e.target.value); setSaved(false); }} />
+            </div>
+            <button onClick={saveModel} disabled={(exam.model_override ?? "") === model.trim()}>Save</button>
+            {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved. Applies to papers graded from now on.</span>}
+          </div>
+          <div className="card row between">
+            <div>
+              <strong>Delete exam</strong>
+              <div className="small muted">Permanently removes all rubric versions, papers, and grades in this exam.</div>
+            </div>
+            <button className="danger" onClick={removeExam}>Delete exam</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

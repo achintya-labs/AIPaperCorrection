@@ -1,8 +1,12 @@
 import csv
 import io
+import zipfile
 
+import fitz
 import pytest
 from fastapi.testclient import TestClient
+
+from app import pdf as pdf_mod
 
 from app.auth import hash_password
 from app.main import app
@@ -79,8 +83,17 @@ def test_score_bounds(env):
     g = detail(ta, env.sid)["grades"][0]  # max 4
     body = {"version": g["version"], "final_feedback": "x"}
     assert ta.patch(f"/grades/{g['id']}", json={**body, "final_score": 4.5}).status_code == 422
-    assert ta.patch(f"/grades/{g['id']}", json={**body, "final_score": -1}).status_code == 422
+    assert ta.patch(f"/grades/{g['id']}", json={**body, "final_score": -4.5}).status_code == 422
     assert ta.patch(f"/grades/{g['id']}", json={**body, "final_score": 4}).status_code == 200
+
+
+def test_negative_marks_are_allowed_down_to_minus_max(env):
+    ta = env.as_user("ta@x.io")
+    g = detail(ta, env.sid)["grades"][0]  # max 4
+    r = ta.patch(f"/grades/{g['id']}", json={"version": g["version"], "final_score": -1, "final_feedback": "wrong"})
+    assert r.status_code == 200 and r.json()["final_score"] == -1 and r.json()["status"] == "overridden"
+    r = ta.patch(f"/grades/{g['id']}", json={"version": r.json()["version"], "final_score": -4, "final_feedback": "x"})
+    assert r.status_code == 200
 
 
 def test_concurrent_tas_stale_write_gets_409(env):
@@ -149,3 +162,95 @@ def test_export_csv(env):
     assert rows[1][7] == "x" and rows[1][8] == "Fake grader: half marks."
     assert env.as_user("ta@x.io").get(f"/exams/{env.exam_id}/export.csv").status_code == 403
     assert env.admin.get("/exams/999/export.csv").status_code == 404
+
+
+def test_export_submission_pdf(env):
+    ta = env.as_user("ta@x.io")
+    g1 = detail(ta, env.sid)["grades"][0]
+    ta.patch(f"/grades/{g1['id']}", json={"version": 1, "final_score": 4, "final_feedback": "TA revised comment"})
+
+    r = ta.get(f"/submissions/{env.sid}/export.pdf")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    with fitz.open(stream=r.content, filetype="pdf") as doc:
+        assert doc.page_count == 4  # marks summary + the 3 answer pages
+        cover = doc[0].get_text()
+        assert "MARKS SUMMARY" in cover and "TOTAL MARKS OBTAINED" in cover and "BREAKDOWN BY SECTION" in cover
+        # The summary page is the same size as the pages after it.
+        assert doc[0].rect == doc[1].rect
+        # Pages are extended to the right so original content is never obscured.
+        assert doc[1].rect.width > 600
+        page1_text = doc[1].get_text()
+        assert "Q1" in page1_text and "TA revised comment" in page1_text
+        # Original page text is still intact on the left.
+        assert "page 0" in page1_text
+        assert "Fake grader: half marks." in doc[2].get_text()
+
+    assert env.as_user("out@x.io").get(f"/submissions/{env.sid}/export.pdf").status_code == 404
+    assert env.admin.get("/submissions/9999/export.pdf").status_code == 404
+
+
+def test_export_exam_zip(env):
+    r = env.admin.get(f"/exams/{env.exam_id}/export.zip")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = zf.namelist()
+        assert names == ["s0.pdf"]
+        with fitz.open(stream=zf.read("s0.pdf"), filetype="pdf") as doc:
+            assert doc.page_count == 4
+            assert "TOTAL MARKS OBTAINED" in doc[0].get_text()
+            assert "Fake grader: half marks." in doc[1].get_text()
+
+    assert env.as_user("ta@x.io").get(f"/exams/{env.exam_id}/export.zip").status_code == 403
+    assert env.admin.get("/exams/999/export.zip").status_code == 404
+
+
+def test_annotate_pdf_expands_height_for_long_comments():
+    with fitz.open() as src:
+        p = src.new_page(width=400, height=200)
+        p.insert_text((40, 60), "Student answer")
+        raw = src.tobytes()
+
+    assert pdf_mod.annotate_pdf(raw, {}) == raw
+
+    long_feedback = " ".join(["Detailed feedback sentence."] * 40)
+    out = pdf_mod.annotate_pdf(
+        raw,
+        {1: [pdf_mod.QuestionComment(question_number="1", score=3.5, max_points=5, feedback=long_feedback)]},
+    )
+    with fitz.open(stream=out, filetype="pdf") as doc:
+        assert doc[0].rect.width == pytest.approx(640.0)
+        assert doc[0].rect.height > 200.0
+        txt = doc[0].get_text()
+        assert "Student answer" in txt
+        assert "Detailed feedback sentence." in txt
+
+
+def test_cover_page_sums_marks_per_section():
+    with fitz.open() as src:
+        src.new_page(width=300, height=400)
+        raw = src.tobytes()
+    secs = [
+        pdf_mod.SectionScore("Section I", 3, 4, (("I.1", 2, 2), ("I.2", 1, 2))),
+        pdf_mod.SectionScore("Section II", 5, 6, (("II.1", 5, 6),)),
+    ]
+    out = pdf_mod.add_cover_page(raw, "Physics Final", "S1 · Ann", secs, "Some marks are unreviewed.")
+    with fitz.open(stream=out, filetype="pdf") as doc:
+        assert doc.page_count == 2 and doc[0].rect == doc[1].rect
+        text = doc[0].get_text()
+        assert "Physics Final" in text and "S1" in text and "8" in text and "10" in text  # 3+5 of 4+6
+        assert "Section I" in text and "Section II" in text and "Some marks are unreviewed." in text
+
+
+def test_sections_group_by_question_number_prefix():
+    from types import SimpleNamespace as NS
+    from app.routes.review import _sections
+
+    def g(num, pos, score, mx):
+        return NS(question=NS(number=num, position=pos, max_points=mx), question_id=pos, final_score=None, ai_score=score)
+
+    secs = _sections([g("I.1", 0, 2, 2), g("I.2", 1, -1, 2), g("II.1", 2, 3, 4)])
+    assert [(s.name, s.score, s.max_points) for s in secs] == [("Section I", 1, 4), ("Section II", 3, 4)]
+    flat = _sections([g("1", 0, 2, 2), g("2a", 1, 1, 3)])
+    assert [(s.name, s.score, s.max_points) for s in flat] == [("All questions", 3, 5)]
+    mixed = _sections([g("I.1", 0, 2, 2), g("7", 1, 1, 3)])
+    assert [s.name for s in mixed] == ["Section I", "Other questions"]

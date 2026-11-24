@@ -62,3 +62,72 @@ def test_admin_creates_ta(client):
     login(client, "admin@x.io")
     r = client.post("/auth/users", json={"email": "n@x.io", "password": "long-enough-pw"})
     assert r.status_code == 201 and r.json()["role"] == "ta"
+
+
+def _dep_calls(dependant) -> set:
+    calls = {dependant.call}
+    for sub in dependant.dependencies:
+        calls |= _dep_calls(sub)
+    return calls
+
+
+def test_every_route_has_expected_auth_dependency(client):
+    from fastapi.routing import APIRoute
+    from app.auth import current_user, require_admin
+
+    public = {
+        ("GET", "/health"),
+        ("POST", "/auth/login"),
+        ("POST", "/auth/logout"),
+        ("GET", "/auth/providers"),
+        ("GET", "/auth/google/login"),
+        ("GET", "/auth/google/callback"),
+    }
+    admin_only = {
+        ("POST", "/auth/users"),
+        ("GET", "/auth/users"),
+        ("PUT", "/auth/users/{user_id}/password"),
+        ("PATCH", "/auth/users/{user_id}"),
+        ("DELETE", "/auth/users/{user_id}"),
+        ("POST", "/exams"),
+        ("PATCH", "/exams/{exam_id}"),
+        ("POST", "/exams/{exam_id}/rubrics"),
+        ("DELETE", "/exams/{exam_id}"),
+        ("POST", "/students"),
+        ("GET", "/students"),
+        ("PUT", "/submissions/{submission_id}/assignment"),
+        ("DELETE", "/submissions/{submission_id}"),
+        ("POST", "/exams/{exam_id}/imports"),
+        ("POST", "/exams/{exam_id}/imports/auto-split"),
+        ("GET", "/exams/{exam_id}/imports/auto-split"),
+        ("GET", "/exams/{exam_id}/imports/auto-split/{split_token}"),
+        ("DELETE", "/exams/{exam_id}/imports/auto-split/{split_token}"),
+        ("POST", "/exams/{exam_id}/imports/auto-split/{split_token}/retry"),
+        ("GET", "/exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image"),
+        ("POST", "/exams/{exam_id}/imports/auto-split/{split_token}/commit"),
+        ("POST", "/exams/{exam_id}/queue"),
+        ("POST", "/submissions/{submission_id}/regrade"),
+        ("GET", "/grader/status"),
+        ("GET", "/exams/{exam_id}/export.csv"),
+        ("GET", "/exams/{exam_id}/export.zip"),
+    }
+
+    seen = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            key = (method, route.path)
+            seen.add(key)
+            deps = _dep_calls(route.dependant)
+            if key in public:
+                continue
+            assert current_user in deps or require_admin in deps, f"{key} is missing authentication"
+            if key in admin_only:
+                assert require_admin in deps, f"{key} must require_admin"
+            else:
+                assert require_admin not in deps, f"{key} unexpectedly requires admin"
+
+    assert admin_only <= seen

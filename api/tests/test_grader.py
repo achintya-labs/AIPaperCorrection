@@ -201,12 +201,20 @@ def test_check_result_rules():
         "Unknown question": mutated(lambda r: setattr(r.questions[0], "question_number", "zz")),
         "more than once": mutated(lambda r: setattr(r.questions[1], "question_number", "1")),
         "exceeds max": mutated(lambda r: setattr(r.questions[0], "score", 5)),
+        "below the minimum": mutated(lambda r: setattr(r.questions[0], "score", -5)),
         "Missing grades": mutated(lambda r: r.questions.pop()),
     }
     for fragment, bad in cases.items():
         with pytest.raises(GraderError, match=fragment) as exc:
             check_result(bad, RUBRIC, 2)
         assert exc.value.retryable
+
+
+def test_negative_marks_are_accepted_down_to_minus_max():
+    good = FakeProvider().grade(PAGES, RUBRIC, "m").result
+    r = good.model_copy(deep=True)
+    r.questions[0].score = -RUBRIC.questions[0].max_points
+    check_result(r, RUBRIC, 2)  # exactly the floor is fine
 
 
 def test_registry():
@@ -217,3 +225,36 @@ def test_registry():
         get_provider(Settings(grader_provider="nope"))
     with pytest.raises(GraderError, match="not implemented"):
         get_provider(Settings(grader_provider="anthropic_api")).grade(PAGES, RUBRIC, "m")
+
+
+def test_propose_split_normalizes_list_and_fenced_result():
+    import json
+    from app.grader.claude_cli import ClaudeExecutor, ExecResult
+
+    class ListExec(ClaudeExecutor):
+        def run(self, model, prompt, files, timeout, json_schema=None):
+            return ExecResult(
+                0,
+                json.dumps(
+                    {
+                        "structured_output": None,
+                        "result": '```json\n[{"student_external_id":"1001","student_name":"","first_page":1,"last_page":2,"confidence":0.9}]\n```',
+                    }
+                ),
+                "",
+            )
+
+        def status(self):
+            return {"ready": True}
+
+    res = ClaudeCliProvider(executor=ListExec()).propose_split(PAGES, "haiku")
+    assert len(res.splits) == 1 and res.splits[0].student_external_id == "1001"
+
+
+def test_check_split_result_enforces_allowed_roll_numbers():
+    from app.grader.base import SplitProposal, SplitResult, check_split_result
+
+    r = SplitResult(splits=[SplitProposal(student_external_id="9999", first_page=1, last_page=2, confidence=0.9)])
+    with pytest.raises(GraderError, match="not in allowed list"):
+        check_split_result(r, 2, allowed_roll_numbers=["1001", "1002"])
+    check_split_result(r, 2, allowed_roll_numbers=["9999"])

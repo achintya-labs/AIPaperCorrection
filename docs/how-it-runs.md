@@ -62,10 +62,12 @@ Rows marked *not wired* have a default in `api/app/config.py` but are not passed
 | `JWT_SECRET` | **required** | api | Signs session cookies. Changing it logs everyone out |
 | `JWT_EXPIRE_MINUTES` | `720` | api | Session lifetime |
 | `COOKIE_SECURE` | `false` | api | Set `true` behind HTTPS so the cookie gets the `Secure` flag |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL` | empty | api | Enables [Sign in with Google](#sign-in-with-google) when all three are set |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | empty | api | First admin, created at startup **only if there are no users** |
 | `DB_PASSWORD` | `grader` | db, api, worker | Postgres password (built into `DATABASE_URL`) |
 | `GRADER_PROVIDER` | `claude_runner` (compose) | api, worker | `claude_runner` (CLI in the `claude` container), `claude_cli` (CLI in the same process), `fake`, `anthropic_api` (stub). The code default outside compose is `claude_cli` |
 | `CLAUDE_MODEL` | `claude-sonnet-5-5` | api, worker | Model used unless the exam sets an override |
+| `CLAUDE_SPLIT_MODEL` | empty (uses `CLAUDE_MODEL`) | api | Optional model used for PDF auto-split analysis (e.g. `haiku`) |
 | `GRADER_TIMEOUT_SECONDS` | `600` | api, worker | Per attempt; also drives stale-job recovery |
 | `WORKER_CONCURRENCY` | `2` | worker, claude | Worker grading threads; also the runner's concurrent CLI limit |
 | `GRADER_MAX_ATTEMPTS` | `2` | worker | Attempts per paper for invalid model output. *not wired* |
@@ -97,8 +99,39 @@ It is read at **runtime**, so one image (including the published one) works on a
 and restart only the web container: `./scripts/compose.sh up -d --force-recreate --no-deps web`. Behind a reverse
 proxy that rewrites `Host`, make sure it sends `X-Forwarded-Host` (the check prefers it).
 
-Behind HTTPS, terminate TLS in a reverse proxy (Caddy, Traefik, nginx) that forwards `Host` and
-`X-Forwarded-Proto`, and set `COOKIE_SECURE=true`.
+Behind HTTPS, terminate TLS in a reverse proxy (nginx, Caddy, Traefik) that forwards `Host` and
+`X-Forwarded-Proto`, and set `COOKIE_SECURE=true`. The compose file ships one: see [HTTPS](#https-reverse-proxy).
+
+### HTTPS reverse proxy
+
+The `proxy` service (nginx, [proxy/nginx.conf](../proxy/nginx.conf)) terminates TLS and forwards to `web`. It is the
+only service published on the network: `web` is bound to `127.0.0.1:4321` and `api` to `127.0.0.1:8000`.
+
+1. Make a certificate: `./scripts/make-cert.sh grader.school.edu 10.0.0.5` (names and/or IPs people will use;
+   `localhost` and `127.0.0.1` are always included). It is **self-signed**, so browsers warn until the certificate
+   is trusted; your real certificate is a drop-in replacement: put it in `certs/tls.crt` (full chain) and `certs/tls.key`, then restart `proxy`.
+2. In `.env`: add the host to `ALLOWED_HOSTS`, set `COOKIE_SECURE=true`, and
+   `PUBLIC_BASE_URL=https://<host>:<HTTPS_PORT>` if you use Google sign-in.
+3. `./scripts/compose.sh up -d`, then open `https://<host>:8443`.
+
+`HTTPS_PORT` defaults to `8443` because rootless Podman cannot bind ports below 1024; set `443` where allowed.
+Regenerate the self-signed one with `--force` and restart `proxy`. HSTS is deliberately off while the certificate is
+self-signed. Google sign-in needs a real domain name (not an IP address) in the OAuth redirect URI.
+
+### Sign in with Google
+
+Optional. Google only proves *who* someone is; it never creates accounts. A person can sign in with Google only if an
+admin has already created a user (Admin → Users) whose email equals their verified Google email (case-insensitive) and
+the user is active. Password login keeps working next to it.
+
+1. In Google Cloud Console → APIs & Services → Credentials, create an **OAuth client ID** of type *Web application*.
+2. Add the authorized redirect URI `<PUBLIC_BASE_URL>/api/auth/google/callback`
+   (for local dev: `http://localhost:4321/api/auth/google/callback`).
+3. Put `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `PUBLIC_BASE_URL` (what users type in the browser, no trailing
+   slash) in `.env`, then restart `api`. The login page now shows a "Sign in with Google" button.
+
+Failures send the user back to the login page with a generic message; the reason is in the `api` log
+(`google sign-in rejected: …`).
 
 ## Claude login
 

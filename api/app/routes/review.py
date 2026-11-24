@@ -1,5 +1,7 @@
 import csv
 import io
+import re
+import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -7,8 +9,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
+from app import pdf
 from app.auth import current_user, require_admin
 from app.db import get_db
+from app.grader.base import score_floor
 from app.models import Exam, Grade, GradeStatus, Page, Submission, SubmissionStatus, User
 from app.routes.exams import latest_rubric
 from app.routes.submissions import SubmissionOut, get_visible_submission, visible_submissions
@@ -54,7 +58,7 @@ class SubmissionDetail(SubmissionOut):
 
 class GradeUpdate(BaseModel):
     version: int
-    final_score: float = Field(ge=0)
+    final_score: float  # may be negative; the range is checked against the question below
     final_feedback: str
 
 
@@ -128,8 +132,8 @@ def update_grade(
     if sub.status not in REVIEWABLE:
         raise HTTPException(409, f"Submission is {sub.status.value}; it can't be reviewed yet")
     max_points = grade.question.max_points
-    if body.final_score > max_points:
-        raise HTTPException(422, f"Score cannot exceed {max_points:g}")
+    if body.final_score > max_points or body.final_score < score_floor(max_points):
+        raise HTTPException(422, f"Score must be between {score_floor(max_points):g} and {max_points:g}")
 
     unchanged = (
         grade.ai_score is not None
@@ -235,4 +239,136 @@ def export_grades(exam_id: int, db: Session = Depends(get_db)):
         out.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="exam-{exam_id}-grades.csv"'},
+    )
+
+
+def _safe_filename(value: str, fallback: str = "paper") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
+    return cleaned or fallback
+
+
+def _to_comment(g: Grade) -> pdf.QuestionComment:
+    score = g.final_score if g.final_score is not None else g.ai_score
+    feedback = g.final_feedback if g.final_feedback is not None else g.ai_feedback
+    return pdf.QuestionComment(
+        question_number=g.question.number,
+        score=score,
+        max_points=g.question.max_points,
+        feedback=feedback or "",
+    )
+
+
+def _annotate_submission_pdf(
+    raw_pdf: bytes, pages: list[Page], grades: list[Grade]
+) -> bytes:
+    ordered_grades = sorted(grades, key=lambda g: (g.question.position, g.question_id))
+    by_num = {g.question.number: g for g in ordered_grades}
+    placed: set[str] = set()
+    page_comments: dict[int, list[pdf.QuestionComment]] = {}
+
+    for p in sorted(pages, key=lambda x: x.index):
+        for qnum in p.question_numbers or []:
+            if qnum in by_num and qnum not in placed:
+                page_comments.setdefault(p.index, []).append(_to_comment(by_num[qnum]))
+                placed.add(qnum)
+
+    unplaced = [g for g in ordered_grades if g.question.number not in placed]
+    if unplaced:
+        target_page = max((p.index for p in pages), default=1)
+        page_comments.setdefault(target_page, []).extend(_to_comment(g) for g in unplaced)
+
+    return pdf.annotate_pdf(raw_pdf, page_comments)
+
+
+def _section_of(number: str) -> str | None:
+    """'II.3' -> 'II'. Question numbers without a dot have no section."""
+    return number.split(".", 1)[0] if "." in number else None
+
+
+def _sections(grades: list[Grade]) -> list[pdf.SectionScore]:
+    """Group marks by section (the part of the question number before the first dot), in rubric order."""
+    ordered = sorted(grades, key=lambda g: (g.question.position, g.question_id))
+    groups: dict[str, list[Grade]] = {}
+    for g in ordered:
+        sec = _section_of(g.question.number)
+        groups.setdefault("All questions" if sec is None and not any(
+            _section_of(x.question.number) for x in ordered) else ("Other questions" if sec is None else f"Section {sec}"), []).append(g)
+    out = []
+    for name, gs in groups.items():
+        qs = tuple(
+            (g.question.number, g.final_score if g.final_score is not None else g.ai_score, g.question.max_points)
+            for g in gs
+        )
+        out.append(pdf.SectionScore(name, sum(s or 0 for _, s, _ in qs), sum(m for _, _, m in qs), qs))
+    return out
+
+
+def _export_pdf(sub: Submission, exam_name: str, raw_pdf: bytes, pages: list[Page], grades: list[Grade]) -> bytes:
+    annotated = _annotate_submission_pdf(raw_pdf, pages, grades)
+    student = sub.student.external_id + (f" · {sub.student.name}" if sub.student.name else "")
+    unreviewed = any(g.status == GradeStatus.pending for g in grades)
+    note = "Some marks are Claude's suggestions that no TA has reviewed yet." if unreviewed else ""
+    return pdf.add_cover_page(annotated, exam_name, student, _sections(grades), note)
+
+
+@router.get("/submissions/{submission_id}/export.pdf")
+def export_submission_pdf(
+    sub: Submission = Depends(get_visible_submission),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    if not storage.exists(sub.pdf_path):
+        raise HTTPException(404, "PDF not found")
+    pages = db.scalars(select(Page).where(Page.submission_id == sub.id).order_by(Page.index)).all()
+    grades = db.scalars(
+        select(Grade).where(Grade.submission_id == sub.id).options(selectinload(Grade.question))
+    ).all()
+    exam = db.get(Exam, sub.exam_id)
+    annotated = _export_pdf(sub, exam.name if exam else f"Exam {sub.exam_id}", storage.read(sub.pdf_path), list(pages), list(grades))
+    stem = _safe_filename(sub.student.external_id, fallback=f"submission-{sub.id}")
+    return Response(
+        annotated,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
+    )
+
+
+@router.get("/exams/{exam_id}/export.zip", dependencies=[Depends(require_admin)])
+def export_exam_pdfs(
+    exam_id: int,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    exam = db.get(Exam, exam_id)
+    if not exam:
+        raise HTTPException(404, "Exam not found")
+    subs = db.scalars(
+        select(Submission)
+        .where(Submission.exam_id == exam_id)
+        .options(
+            selectinload(Submission.student),
+            selectinload(Submission.pages),
+            selectinload(Submission.grades).selectinload(Grade.question),
+        )
+        .order_by(Submission.id)
+    ).all()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        used_names: set[str] = set()
+        for s in subs:
+            if not storage.exists(s.pdf_path):
+                continue
+            annotated = _export_pdf(s, exam.name, storage.read(s.pdf_path), s.pages, s.grades)
+            base = _safe_filename(s.student.external_id, fallback=f"submission-{s.id}")
+            name = f"{base}.pdf"
+            if name in used_names:
+                name = f"{base}-{s.id}.pdf"
+            used_names.add(name)
+            zf.writestr(name, annotated)
+
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="exam-{exam_id}-papers.zip"'},
     )

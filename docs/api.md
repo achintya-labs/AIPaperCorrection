@@ -1,6 +1,6 @@
 # API reference
 
-31 endpoints on the FastAPI service, plus 3 internal endpoints on the Claude runner
+40 endpoints on the FastAPI service, plus 3 internal endpoints on the Claude runner
 ([appendix](#appendix-claude-runner-internal)). The machine-readable spec is [`openapi.json`](openapi.json),
 regenerated with `python scripts/export-openapi.py`. The running API also serves Swagger UI at `/docs`
 (development port only).
@@ -50,6 +50,11 @@ curl -s -b jar $API/auth/me
 
 **Password rules.** Wherever a new password is set (create user, change, reset): **at least 8 characters and at most
 72 bytes** (bcrypt ignores anything beyond 72 bytes, so longer passwords are rejected instead of silently truncated).
+**Blank passwords.** An admin may leave the password **blank** when creating a user or resetting *another* user's
+password. That account then has no password (`has_password: false` in `GET /auth/users`) and can sign in only with
+Google. A blank password never signs anyone in, and nobody can blank their **own** password (422), through either
+`PUT /auth/me/password` or by resetting themselves.
+
 Violations are 422 with `{"detail": [{"loc": ["body", "new_password"], "msg": "Password must be at least 8 characters", …}]}`.
 
 **Sessions and passwords.** Changing or resetting a password signs out that account's **other** sessions immediately
@@ -63,13 +68,28 @@ Violations are 422 with `{"detail": [{"loc": ["body", "new_password"], "msg": "P
 ## Auth
 
 ### `POST /auth/login`
-Public. Body `{"email": str, "password": str}`.
+Public. Body `{"email": str, "password": str}`. A blank `password` is always **401**, and so is any account that has no password (Google-only).
 **200** → `UserOut` and `Set-Cookie: session=…; HttpOnly; SameSite=Lax` (`Secure` if `COOKIE_SECURE=true`; max-age =
 `JWT_EXPIRE_MINUTES`). **401** wrong credentials or inactive user.
 
 ```json
 {"id": 1, "email": "admin@example.com", "name": "Admin", "role": "admin"}
 ```
+
+### `GET /auth/providers`
+Public. **200** `{"google": bool}`: whether Google sign-in is configured (the login page shows its button only then).
+
+### `GET /auth/google/login`
+Public. Starts Google sign-in (authorization code + PKCE). **302** to Google and sets the short-lived `oauth_tx`
+cookie holding `state`, `nonce` and the PKCE verifier. **404** if Google sign-in is not configured. Browsers reach it as
+`/api/auth/google/login` (a plain link, not a fetch).
+
+### `GET /auth/google/callback`
+Public. Google's redirect target (`{PUBLIC_BASE_URL}/api/auth/google/callback`). Checks `state`, exchanges the code, verifies
+the ID token (signature, issuer, audience, expiry, nonce, `email_verified`) and signs in the **existing, active** user with
+that email (case-insensitive); accounts are never created from Google. **302** to `/` with the `session` cookie on success;
+**302** to `/login?error=<code>` otherwise, where code is `google_not_allowed` (no matching active user),
+`google_cancelled` or `google_failed`. **404** if not configured.
 
 ### `POST /auth/logout`
 Public. **204**, clears the cookie.
@@ -109,7 +129,7 @@ an informed choice before deleting.
 ```
 
 ### `POST /auth/users`
-Admin. Body: `email` (required), `password` (required), `name` (default `""`), `role` (`ta` default, or `admin`).
+Admin. Body: `email` (required), `password` (required; may be `""` for a Google-only account), `name` (default `""`), `role` (`ta` default, or `admin`).
 **201** → `UserOut`. **409** email exists. **422** if the password breaks the [password rules](#conventions).
 
 ```sh
@@ -138,15 +158,13 @@ curl -s -b jar -X PATCH -H 'content-type: application/json' -d '{"active":false}
 ```
 
 ### `PUT /auth/users/{user_id}/password`
-Admin. **Reset another user's password** (they forgot it, or the account may be compromised). Body `{"password": str}`
-following the [password rules](#conventions). **204**. All of that user's sessions are signed out; they must sign in
-with the new password. Works for inactive users and does not reactivate them. There is no "must change on first
-sign-in" flag, so tell the user to change it from their Account page.
+Admin. **Reset a user's password** directly without requiring the current password. Body `{"password": str}`
+following the [password rules](#conventions), or `""` to remove the user's password (Google-only). **204**. **422** for `""` on your own account. All other sessions of that user are signed out (if resetting
+your own account, your current session stays signed in). Works for inactive users and does not reactivate them.
 
 | Status | When |
 |---|---|
 | 404 | No such user |
-| 409 | It's **your own** account. Use `PUT /auth/me/password`, which requires the current password, so a hijacked admin session can't quietly take the account over |
 | 422 | Password breaks the rules |
 
 ```sh
@@ -205,7 +223,7 @@ Body:
 ```
 
 `questions` needs at least one; `number` is a string and unique within the rubric; `max_points` > 0; each criterion
-`points` ≥ 0 and the criteria of a question must sum to at most its `max_points`.
+`points` may be negative (a deduction), and the **positive** criteria points of a question must sum to at most its `max_points`.
 **201** → `RubricOut` `{id, exam_id, version, questions[{id, number, text, max_points, expected_answer, criteria}]}`.
 **404** exam. **422** duplicate numbers, criteria over max, or schema errors.
 
@@ -335,6 +353,35 @@ otherwise `uploaded`.
 `student_id`, bad or overlapping page ranges, combined import without exactly one PDF, round-robin with no
 active TAs.
 
+### `POST /exams/{exam_id}/imports/auto-split`
+Admin. `multipart/form-data` with `file` (one combined PDF) and optional `roll_numbers_txt` (UTF-8 `.txt`, one
+roll number per line, to constrain Claude to only those IDs). Stages the PDF and queues a background job for the
+worker (Claude) to propose paper boundaries (`first_page`, `last_page`) and extract student roll numbers
+(`student_external_id`) and names. Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`,
+`error`, `allowed_roll_numbers`, `splits`, `existing_student_ids`). **404** exam. **413** file over `MAX_UPLOAD_MB`. **422** invalid PDF or empty/non-UTF-8 roll numbers file.
+
+### `GET /exams/{exam_id}/imports/auto-split`
+Admin. Lists staged/background auto-split jobs for the exam (`AutoSplitResult[]`, newest first), so the UI can
+resume in-progress or completed splits after leaving the page. **404** exam.
+
+### `GET /exams/{exam_id}/imports/auto-split/{split_token}`
+Admin. Polls the status (`queued | processing | ready | failed`) and proposed splits of one auto-split job. **404** missing.
+
+### `DELETE /exams/{exam_id}/imports/auto-split/{split_token}`
+Admin. Discards a staged auto-split job and deletes its temporary PDF. **204**. **404** missing.
+
+### `POST /exams/{exam_id}/imports/auto-split/{split_token}/retry`
+Admin. Requeues a failed (or ready) auto-split job using the already-staged PDF. **200** → `AutoSplitResult`. **404** missing. **409** if already `queued` or `processing`.
+
+### `GET /exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image`
+Admin. Returns a PNG preview (`image/png`) of 1-based page `index` from the staged auto-split PDF so the admin
+can visually verify the proposed split and roll numbers. **404** invalid token, missing session, or out-of-range page.
+
+### `POST /exams/{exam_id}/imports/auto-split/{split_token}/commit`
+Admin. Body `{"items": [{"student_external_id": str, "student_name": str, "first_page": int, "last_page": int, "ta_ids": [int]}]}`.
+Splits the staged PDF into per-student submissions, assigns the specified TAs, deletes the staged PDF, and
+returns `ImportResult`. **404** exam or split session. **422** empty/duplicate `student_external_id`, invalid/overlapping page ranges, or unknown/inactive TA.
+
 ---
 
 ## Grading control
@@ -398,7 +445,7 @@ Any, scoped. Save a TA's decision on one question. Body:
 | Field | Notes |
 |---|---|
 | `version` | The `version` you read. Required |
-| `final_score` | Number ≥ 0 and ≤ the question's `max_points` |
+| `final_score` | Number from `-max_points` to `max_points` (negative marking is allowed) |
 | `final_feedback` | Text |
 
 **Approving** Claude's grade = send its `ai_score` and `ai_feedback` unchanged → `status: "reviewed"`. Any other
@@ -410,7 +457,7 @@ values → `"overridden"`. On success `version` increases by 1 and `reviewed_by`
 | 404 | Grade missing or its submission is not visible to you |
 | 409 | Submission is not `ready_for_review`/`reviewed` (`detail` is a string) |
 | 409 | **Stale version**: someone saved first. `detail` is `{"message": …, "current": <GradeOut>}`; re-send with `current.version` |
-| 422 | Score above `max_points` or negative |
+| 422 | Score above `max_points` or below `-max_points` |
 
 Sequence diagram: [workflows.md#5](workflows.md#5-review-and-edit-conflicts).
 
@@ -430,6 +477,26 @@ with `=`, `+`, `-` or `@` are prefixed with `'` to prevent spreadsheet formula i
 
 ```sh
 curl -s -b jar -o grades.csv $API/exams/1/export.csv
+```
+
+### `GET /submissions/{submission_id}/export.pdf`
+Any, scoped. Downloads the submission's PDF (`application/pdf`) with each page extended to the right so that
+question scores and comments (`final_*` when reviewed/overridden, otherwise `ai_*`) appear beside the pages where
+those questions are answered without obscuring the original answer sheet. Any question not matched to a page is
+placed on the last page. A **marks summary page** is added in front, the same size as the first page: exam name, student,
+total marks obtained out of the maximum, and a breakdown per section (the part of the question number before the first
+`.`, so `II.3` is in Section II; numbers without a dot are grouped as one block). **404** if missing, not yours, or PDF file not found.
+
+```sh
+curl -s -b jar -o paper.pdf $API/submissions/7/export.pdf
+```
+
+### `GET /exams/{exam_id}/export.zip`
+Admin. Downloads a ZIP archive (`application/zip`, `Content-Disposition: attachment; filename="exam-{id}-papers.zip"`)
+containing one annotated PDF (`<student_id>.pdf`) per submission in the exam, each with the same marks summary first page. **404** exam.
+
+```sh
+curl -s -b jar -o papers.zip $API/exams/1/export.zip
 ```
 
 ---

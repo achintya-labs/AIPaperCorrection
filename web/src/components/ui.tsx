@@ -29,3 +29,15 @@ export function Alert({ tone = "", children }: { tone?: "" | "bad" | "warn" | "o
 }
 
 export const fmt = (n: number | null | undefined) => (n == null ? "–" : String(Math.round(n * 100) / 100));
+
+/** A person: name on top (falls back to the email), email below and subdued. Never lets the two blur together. */
+export function Person({ user }: { user: { name?: string | null; email: string } | undefined }) {
+  if (!user) return null;
+  const name = user.name?.trim();
+  return (
+    <span className="person">
+      <span className="person-name">{name || user.email}</span>
+      {name && <span className="person-email">{user.email}</span>}
+    </span>
+  );
+}

@@ -1,8 +1,8 @@
 ---
 import "../styles.css";
 
-interface Props { title: string; wide?: boolean; fill?: boolean }
-const { title, wide = false, fill = false } = Astro.props;
+interface Props { title: string; wide?: boolean }
+const { title, wide = false } = Astro.props;
 const user = Astro.locals.user;
 const path = Astro.url.pathname;
 ---
@@ -11,26 +11,38 @@ const path = Astro.url.pathname;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title} · Paper Grader</title>
   </head>
-  <body class:list={[{ "fill-page": fill }]}>
+  <body>
     {user && (
       <header class="topbar">
-        <a class="brand" href="/">Paper Grader</a>
+        <a class="brand" href="/">
+          <img src="/favicon.svg" alt="" width="22" height="22" />
+          <span>Paper Grader</span>
+        </a>
         <nav>
           <a href="/" aria-current={path === "/" ? "page" : undefined}>My queue</a>
           {user.role === "admin" && (
             <>
-              <a href="/admin" aria-current={path.startsWith("/admin") && !path.startsWith("/admin/users") ? "page" : undefined}>Exams</a>
+              <a href="/admin/exams" aria-current={path.startsWith("/admin/exams") ? "page" : undefined}>Exams</a>
               <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Users</a>
             </>
           )}
         </nav>
-        <a class="small" href="/account" aria-current={path === "/account" ? "page" : undefined} title="Change your password">{user.email} ({user.role})</a>
-        <button id="logout">Log out</button>
+        <div class="topbar-end">
+          <a class="me" href="/account" aria-current={path === "/account" ? "page" : undefined} title="Account and password">
+            <span class="person">
+              <span class="person-name">{user.name?.trim() || user.email}</span>
+              {user.name?.trim() && <span class="person-email">{user.email}</span>}
+            </span>
+            <span class="badge neutral">{user.role === "admin" ? "Admin" : "TA"}</span>
+          </a>
+          <button id="logout">Log out</button>
+        </div>
       </header>
     )}
-    <main class:list={["container", { wide, fill }]}>
+    <main class:list={["container", { wide }]}>
       <slot />
     </main>
     <script>

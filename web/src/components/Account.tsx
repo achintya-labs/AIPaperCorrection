@@ -36,7 +36,7 @@ export default function Account() {
   return (
     <div className="stack" style={{ maxWidth: 480 }}>
       <h1>Account</h1>
-      {me && <p className="muted">{me.email} · {me.role}</p>}
+      {me && <p className="muted">{me.name ? `${me.name} · ` : ""}{me.email} · {me.role === "admin" ? "Admin" : "TA"}</p>}
       <form className="card stack" onSubmit={submit}>
         <h2 style={{ margin: 0 }}>Change password</h2>
         {error && <Alert tone="bad">{error}</Alert>}

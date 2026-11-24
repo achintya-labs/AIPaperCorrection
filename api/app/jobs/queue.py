@@ -1,6 +1,9 @@
 """DB-backed job queue: a submission with status `queued` is a pending grading job."""
 
+import logging
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger("worker.queue")
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, selectinload
@@ -14,6 +17,8 @@ from app.models import (
     GradingRun,
     Page,
     Rubric,
+    SplitJob,
+    SplitJobStatus,
     Submission,
     SubmissionStatus,
 )
@@ -44,14 +49,20 @@ def claim_next(db: Session, worker_id: str | None = None) -> Submission | None:
 
 
 def recover_stale(db: Session, older_than: timedelta) -> int:
-    """Requeue jobs whose worker died mid-grading."""
-    result = db.execute(
+    """Requeue jobs whose worker died mid-grading or mid-splitting."""
+    cutoff = utcnow() - older_than
+    r1 = db.execute(
         update(Submission)
-        .where(Submission.status == SubmissionStatus.grading, Submission.claimed_at < utcnow() - older_than)
+        .where(Submission.status == SubmissionStatus.grading, Submission.claimed_at < cutoff)
         .values(status=SubmissionStatus.queued, claimed_at=None, claimed_by=None)
     )
+    r2 = db.execute(
+        update(SplitJob)
+        .where(SplitJob.status == SplitJobStatus.processing, SplitJob.claimed_at < cutoff)
+        .values(status=SplitJobStatus.queued, claimed_at=None, claimed_by=None)
+    )
     db.commit()
-    return result.rowcount
+    return r1.rowcount + r2.rowcount
 
 
 def recover_own(db: Session, worker_id: str) -> int:
@@ -61,13 +72,18 @@ def recover_own(db: Session, worker_id: str) -> int:
     running worker (a container's hostname, or WORKER_ID). Anything else still falls back to the
     slower recover_stale.
     """
-    result = db.execute(
+    r1 = db.execute(
         update(Submission)
         .where(Submission.status == SubmissionStatus.grading, Submission.claimed_by == worker_id)
         .values(status=SubmissionStatus.queued, claimed_at=None, claimed_by=None)
     )
+    r2 = db.execute(
+        update(SplitJob)
+        .where(SplitJob.status == SplitJobStatus.processing, SplitJob.claimed_by == worker_id)
+        .values(status=SplitJobStatus.queued, claimed_at=None, claimed_by=None)
+    )
     db.commit()
-    return result.rowcount
+    return r1.rowcount + r2.rowcount
 
 def _rubric_for(db: Session, sub: Submission) -> Rubric | None:
     if sub.rubric_id:
@@ -82,6 +98,7 @@ def _rubric_for(db: Session, sub: Submission) -> Rubric | None:
 
 
 def _fail(db: Session, sub: Submission, settings: Settings, provider: GraderProvider, model: str, msg: str):
+    log.warning("submission %s failed (provider=%s model=%s): %s", sub.id, provider.name, model, msg)
     db.rollback()
     sub = db.merge(sub)
     sub.status = SubmissionStatus.failed
@@ -171,3 +188,55 @@ def process(db: Session, sub: Submission, provider: GraderProvider, storage: Sto
         db.commit()
     except Exception as e:
         _fail(db, sub, settings, provider, model, f"Saving results failed: {e}")
+
+
+def claim_next_split(db: Session, worker_id: str | None = None) -> SplitJob | None:
+    """Atomically take the oldest queued PDF auto-split job."""
+    job = db.scalar(
+        select(SplitJob)
+        .where(SplitJob.status == SplitJobStatus.queued)
+        .order_by(SplitJob.id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if job is None:
+        return None
+    job.status = SplitJobStatus.processing
+    job.claimed_at = utcnow()
+    job.claimed_by = worker_id
+    job.error = None
+    db.commit()
+    return job
+
+
+def process_split(db: Session, job: SplitJob, provider: GraderProvider, storage: Storage, settings: Settings) -> None:
+    """Render pages and run Claude auto-split for one claimed SplitJob. Never raises."""
+    job_id, exam_id, pdf_path = job.id, job.exam_id, job.pdf_path
+    allowed_rolls = list(job.allowed_roll_numbers or [])
+    exam = db.get(Exam, exam_id)
+    model = settings.claude_split_model or (exam.model_override if exam else None) or settings.claude_model
+    try:
+        pdf_bytes = storage.read(pdf_path)
+        images = [
+            PageImage(index=i, png=png)
+            for i, png in enumerate(pdf.render_pages(pdf_bytes, dpi=100), start=1)
+        ]
+        db.rollback()
+        result = provider.propose_split(images, model, allowed_roll_numbers=allowed_rolls or None)
+        fresh = db.get(SplitJob, job_id)
+        if fresh is None:
+            return
+        fresh.splits = [sp.model_dump() for sp in result.splits]
+        fresh.status = SplitJobStatus.ready
+        fresh.error = None
+        db.commit()
+    except Exception as e:
+        msg = str(e) or type(e).__name__
+        log.warning("split job %s failed (exam=%s model=%s): %s", job_id, exam_id, model, msg)
+        db.rollback()
+        fresh = db.get(SplitJob, job_id)
+        if fresh is None:
+            return
+        fresh.status = SplitJobStatus.failed
+        fresh.error = msg
+        db.commit()

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, errMsg } from "../lib/api";
-import type { Exam, Submission, SubmissionStatus } from "../lib/types";
-import { Alert, ConfidenceBadge, StatusBadge } from "./ui";
+import type { Exam, Submission, SubmissionStatus, UserAdmin } from "../lib/types";
+import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
 
@@ -17,28 +17,46 @@ function attentionOrder(a: Submission, b: Submission) {
   );
 }
 
-export default function Queue() {
+export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
   const [subs, setSubs] = useState<Submission[] | null>(null);
   const [exams, setExams] = useState<Exam[]>([]);
+  const [tas, setTas] = useState<UserAdmin[]>([]);
   const [error, setError] = useState("");
   const [examId, setExamId] = useState("");
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
 
   useEffect(() => {
-    Promise.all([api<Submission[]>("/submissions"), api<Exam[]>("/exams")])
-      .then(([s, e]) => { setSubs(s); setExams(e); })
+    Promise.all([
+      api<Submission[]>("/submissions"),
+      api<Exam[]>("/exams"),
+      isAdmin ? api<UserAdmin[]>("/auth/users").catch(() => []) : Promise.resolve([]),
+    ])
+      .then(([s, e, u]) => { setSubs(s); setExams(e); setTas(u); })
       .catch((e) => setError(errMsg(e)));
-  }, []);
+  }, [isAdmin]);
 
   const examName = (id: number) => exams.find((e) => e.id === id)?.name ?? `Exam ${id}`;
+  const taOf = (id: number) => tas.find((t) => t.id === id);
+  const taText = (id: number) => { const t = taOf(id); return t ? `${t.name} ${t.email}` : `#${id}`; };
   const shown = useMemo(
     () =>
       (subs ?? [])
         .filter((s) => (!examId || s.exam_id === Number(examId)) && (!status || s.status === status))
-        .filter((s) => matchesQuery([s.student.external_id, s.student.name, examName(s.exam_id), s.status.replace(/_/g, " ")], q))
+        .filter((s) =>
+          matchesQuery(
+            [
+              s.student.external_id,
+              s.student.name,
+              examName(s.exam_id),
+              s.status.replace(/_/g, " "),
+              ...(isAdmin ? s.ta_ids.map(taText) : []),
+            ],
+            q,
+          ),
+        )
         .sort(attentionOrder),
-    [subs, exams, examId, status, q],
+    [subs, exams, tas, isAdmin, examId, status, q],
   );
   const todo = (subs ?? []).filter((s) => s.status === "ready_for_review").length;
 
@@ -75,7 +93,7 @@ export default function Queue() {
         ) : (
           <table>
             <thead>
-              <tr><th>Student</th><th>Exam</th><th>Status</th><th>Reviewed</th><th>Lowest confidence</th><th>Overall</th><th></th></tr>
+              <tr><th>Student</th><th>Exam</th><th>Status</th>{isAdmin && <th>TAs</th>}<th>Reviewed</th><th>Lowest confidence</th><th>Overall</th><th></th></tr>
             </thead>
             <tbody>
               {shown.map((s) => (
@@ -86,13 +104,27 @@ export default function Queue() {
                   </td>
                   <td>{examName(s.exam_id)}</td>
                   <td><StatusBadge status={s.status} /></td>
+                  {isAdmin && (
+                    <td className="tas-cell">
+                      <div className="tas-list">
+                        {s.ta_ids.length
+                          ? s.ta_ids.map((id) => taOf(id) ? <Person key={id} user={taOf(id)} /> : <span key={id} className="muted">#{id}</span>)
+                          : <span className="muted">unassigned</span>}
+                      </div>
+                    </td>
+                  )}
                   <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
                   <td><ConfidenceBadge value={s.min_confidence} /></td>
                   <td><ConfidenceBadge value={s.overall_confidence} /></td>
                   <td>
-                    {["ready_for_review", "reviewed"].includes(s.status) && (
-                      <a className="btn" href={`/review/${s.id}`}>{s.status === "reviewed" ? "Open" : "Review"}</a>
-                    )}
+                    <div className="row" style={{ justifyContent: "flex-end" }}>
+                      {["ready_for_review", "reviewed"].includes(s.status) && (
+                        <a className="btn" href={`/review/${s.id}`} style={{ minWidth: "4.75rem", textAlign: "center" }}>
+                          {s.status === "reviewed" ? "Open" : "Review"}
+                        </a>
+                      )}
+                      <a className="btn" href={`/api/submissions/${s.id}/export.pdf`}>PDF</a>
+                    </div>
                   </td>
                 </tr>
               ))}

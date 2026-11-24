@@ -1,13 +1,14 @@
 import csv
 import io
+import re
 import uuid
 from enum import Enum
 from pathlib import PurePath
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,7 @@ from app import pdf
 from app.auth import require_admin
 from app.config import get_settings
 from app.db import get_db
-from app.models import Exam, Role, Student, Submission, SubmissionStatus, User
+from app.models import Exam, Role, SplitJob, SplitJobStatus, Student, Submission, SubmissionStatus, User
 from app.routes.exams import latest_rubric
 from app.storage import Storage, get_storage
 
@@ -225,4 +226,286 @@ async def import_submissions(
         for key in saved:
             storage.delete(key)
         raise
+    return ImportResult(dry_run=False, created=len(plan), items=items)
+
+
+_SPLIT_TOKEN = re.compile(r"^[a-f0-9]{32}$")
+
+
+class ProposedSplit(BaseModel):
+    student_external_id: str
+    student_name: str = ""
+    first_page: int
+    last_page: int
+    confidence: float | None = None
+
+
+class AutoSplitResult(BaseModel):
+    split_token: str
+    filename: str
+    page_count: int
+    status: SplitJobStatus
+    error: str | None = None
+    allowed_roll_numbers: list[str] = []
+    splits: list[ProposedSplit]
+    existing_student_ids: list[str]
+
+
+class AutoSplitItemIn(BaseModel):
+    student_external_id: str
+    student_name: str = ""
+    first_page: int = Field(ge=1)
+    last_page: int = Field(ge=1)
+    ta_ids: list[int] = []
+
+
+class AutoSplitCommitIn(BaseModel):
+    items: list[AutoSplitItemIn] = Field(min_length=1)
+
+
+def _split_key(exam_id: int, token: str) -> str:
+    if not _SPLIT_TOKEN.fullmatch(token):
+        raise HTTPException(404, "Split session not found")
+    return f"tmp_splits/{exam_id}/{token}.pdf"
+
+
+def _get_split_job(db: Session, exam_id: int, token: str) -> SplitJob:
+    if not _SPLIT_TOKEN.fullmatch(token):
+        raise HTTPException(404, "Split session not found")
+    job = db.scalar(select(SplitJob).where(SplitJob.exam_id == exam_id, SplitJob.token == token))
+    if not job:
+        raise HTTPException(404, "Split session not found")
+    return job
+
+
+def _existing_student_ids(db: Session, exam_id: int) -> list[str]:
+    return sorted(
+        s.student.external_id
+        for s in db.scalars(select(Submission).where(Submission.exam_id == exam_id))
+    )
+
+
+def _split_out(job: SplitJob, existing: list[str]) -> AutoSplitResult:
+    return AutoSplitResult(
+        split_token=job.token,
+        filename=job.filename,
+        page_count=job.page_count,
+        status=job.status,
+        error=job.error,
+        allowed_roll_numbers=list(job.allowed_roll_numbers or []),
+        splits=[ProposedSplit(**sp) for sp in (job.splits or [])],
+        existing_student_ids=existing,
+    )
+
+
+def _parse_roll_numbers_txt(raw: bytes) -> list[str]:
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(422, "Roll numbers file must be UTF-8 text")
+    rolls = list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
+    if not rolls:
+        raise HTTPException(422, "Roll numbers file is empty")
+    return rolls
+
+
+@router.post("/exams/{exam_id}/imports/auto-split", response_model=AutoSplitResult)
+async def auto_split_import(
+    exam_id: int,
+    file: UploadFile = File(...),
+    roll_numbers_txt: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    """Upload one combined PDF and queue a background job for Claude to propose splits & roll numbers."""
+    if not db.get(Exam, exam_id):
+        raise HTTPException(404, "Exam not found")
+
+    allowed_rolls = _parse_roll_numbers_txt(await _read_upload(roll_numbers_txt)) if roll_numbers_txt else []
+    data = await _read_upload(file)
+    try:
+        total_pages = await run_in_threadpool(pdf.page_count, data)
+    except pdf.PdfError as e:
+        raise HTTPException(422, str(e))
+
+    token = uuid.uuid4().hex
+    key = _split_key(exam_id, token)
+    storage.save(key, data)
+    job = SplitJob(
+        exam_id=exam_id,
+        token=token,
+        filename=file.filename or "combined.pdf",
+        pdf_path=key,
+        page_count=total_pages,
+        status=SplitJobStatus.queued,
+        allowed_roll_numbers=allowed_rolls,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return _split_out(job, _existing_student_ids(db, exam_id))
+
+
+@router.get("/exams/{exam_id}/imports/auto-split", response_model=list[AutoSplitResult])
+def list_auto_splits(exam_id: int, db: Session = Depends(get_db)):
+    if not db.get(Exam, exam_id):
+        raise HTTPException(404, "Exam not found")
+    jobs = db.scalars(
+        select(SplitJob).where(SplitJob.exam_id == exam_id).order_by(SplitJob.id.desc())
+    ).all()
+    existing = _existing_student_ids(db, exam_id) if jobs else []
+    return [_split_out(j, existing) for j in jobs]
+
+
+@router.get("/exams/{exam_id}/imports/auto-split/{split_token}", response_model=AutoSplitResult)
+def get_auto_split(exam_id: int, split_token: str, db: Session = Depends(get_db)):
+    job = _get_split_job(db, exam_id, split_token)
+    return _split_out(job, _existing_student_ids(db, exam_id))
+
+
+@router.delete("/exams/{exam_id}/imports/auto-split/{split_token}", status_code=204)
+def delete_auto_split(
+    exam_id: int,
+    split_token: str,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    job = _get_split_job(db, exam_id, split_token)
+    key = job.pdf_path
+    db.delete(job)
+    db.commit()
+    storage.delete(key)
+
+
+@router.post("/exams/{exam_id}/imports/auto-split/{split_token}/retry", response_model=AutoSplitResult)
+def retry_auto_split(exam_id: int, split_token: str, db: Session = Depends(get_db)):
+    job = _get_split_job(db, exam_id, split_token)
+    if job.status in (SplitJobStatus.queued, SplitJobStatus.processing):
+        raise HTTPException(409, "Split job is already queued or processing")
+    job.status = SplitJobStatus.queued
+    job.error = None
+    job.claimed_at = None
+    job.claimed_by = None
+    db.commit()
+    db.refresh(job)
+    return _split_out(job, _existing_student_ids(db, exam_id))
+
+
+@router.get("/exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image")
+def auto_split_page_image(
+    exam_id: int,
+    split_token: str,
+    index: int,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    job = _get_split_job(db, exam_id, split_token)
+    if not storage.exists(job.pdf_path):
+        raise HTTPException(404, "Split session not found")
+    try:
+        png = pdf.render_page(storage.read(job.pdf_path), index, dpi=110)
+    except pdf.PdfError as e:
+        raise HTTPException(404, str(e))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.post("/exams/{exam_id}/imports/auto-split/{split_token}/commit", response_model=ImportResult)
+async def commit_auto_split_import(
+    exam_id: int,
+    split_token: str,
+    body: AutoSplitCommitIn,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    if not db.get(Exam, exam_id):
+        raise HTTPException(404, "Exam not found")
+    job = _get_split_job(db, exam_id, split_token)
+    if job.status == SplitJobStatus.processing:
+        raise HTTPException(409, "Split job is currently processing")
+    key = job.pdf_path
+    if not storage.exists(key):
+        raise HTTPException(404, "Split session not found")
+
+    seen: set[str] = set()
+    cleaned_ids: list[str] = []
+    for it in body.items:
+        sid = it.student_external_id.strip()
+        if not sid:
+            raise HTTPException(422, "Every paper must have a student roll number / ID")
+        if sid in seen:
+            raise HTTPException(422, f"Duplicate student_id in split: {sid}")
+        seen.add(sid)
+        cleaned_ids.append(sid)
+
+    all_ta_ids = {tid for it in body.items for tid in it.ta_ids}
+    users_by_id = (
+        {
+            u.id: u
+            for u in db.scalars(select(User).where(User.id.in_(all_ta_ids), User.active, User.role == Role.ta))
+        }
+        if all_ta_ids
+        else {}
+    )
+    if len(users_by_id) != len(all_ta_ids):
+        raise HTTPException(422, "Unknown or inactive TA")
+
+    raw_pdf = storage.read(key)
+    ranges = [(it.first_page, it.last_page) for it in body.items]
+    try:
+        parts = await run_in_threadpool(pdf.extract_ranges, raw_pdf, ranges)
+    except pdf.PdfError as e:
+        raise HTTPException(422, str(e))
+
+    existing = set(_existing_student_ids(db, exam_id))
+    rubric = latest_rubric(db, exam_id)
+
+    items: list[ImportItem] = []
+    plan: list[tuple[ImportItem, str, bytes, list[User]]] = []
+    for sid, it, part in zip(cleaned_ids, body.items, parts):
+        tas = [users_by_id[tid] for tid in dict.fromkeys(it.ta_ids)]
+        item = ImportItem(
+            student_external_id=sid,
+            filename=f"pages {it.first_page}-{it.last_page}",
+            pages=it.last_page - it.first_page + 1,
+            status="ok",
+            ta_emails=[t.email for t in tas],
+        )
+        items.append(item)
+        if sid in existing:
+            item.status, item.detail = "conflict", "Student already has a submission for this exam"
+            continue
+        plan.append((item, it.student_name.strip(), part, tas))
+
+    saved: list[str] = []
+    try:
+        for item, name, part, tas in plan:
+            student = db.scalar(select(Student).where(Student.external_id == item.student_external_id))
+            if student is None:
+                student = Student(external_id=item.student_external_id, name=name)
+                db.add(student)
+                db.flush()
+            elif name and not student.name:
+                student.name = name
+            sub_key = f"submissions/{exam_id}/{uuid.uuid4().hex}.pdf"
+            storage.save(sub_key, part)
+            saved.append(sub_key)
+            sub = Submission(
+                exam_id=exam_id,
+                student_id=student.id,
+                pdf_path=sub_key,
+                tas=tas,
+                status=SubmissionStatus.queued if rubric else SubmissionStatus.uploaded,
+            )
+            db.add(sub)
+            db.flush()
+            item.submission_id = sub.id
+        db.delete(job)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for sub_key in saved:
+            storage.delete(sub_key)
+        raise
+
+    storage.delete(key)
     return ImportResult(dry_run=False, created=len(plan), items=items)

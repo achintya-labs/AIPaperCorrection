@@ -152,3 +152,154 @@ def test_pdf_functions_survive_concurrent_threads():
         renders = list(ex.map(lambda _: pdf.render_pages(data, dpi=40), range(16)))
         counts = list(ex.map(lambda _: pdf.page_count(data), range(16)))
     assert all(len(r) == 4 for r in renders) and set(counts) == {4}
+
+
+def test_auto_split_propose_preview_and_commit(client, storage):
+    from app.config import Settings
+    from app.grader.fake import FakeProvider
+    from app.jobs import worker
+    from tests.test_auth import TestSession
+
+    exam_id = make_exam(client)
+    tas = client.get("/auth/users").json()
+    ta_id = next(u["id"] for u in tas if u["email"] == "ta@x.io")
+
+    r = client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={"file": ("combined.pdf", make_pdf(4), "application/pdf")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    token = body["split_token"]
+    assert body["page_count"] == 4 and body["status"] == "queued" and body["splits"] == []
+
+    # Resumable via list endpoint before/after worker runs.
+    listed = client.get(f"/exams/{exam_id}/imports/auto-split").json()
+    assert len(listed) == 1 and listed[0]["split_token"] == token
+
+    assert worker.run_once(FakeProvider(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
+    polled = client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()
+    assert polled["status"] == "ready"
+    assert [(s["student_external_id"], s["first_page"], s["last_page"]) for s in polled["splits"]] == [
+        ("s1", 1, 2),
+        ("s2", 3, 4),
+    ]
+
+    # Visual verification page thumbnails work and 404 out of bounds / bad token.
+    img = client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/1/image")
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png" and img.content[:4] == b"\x89PNG"
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/9/image").status_code == 404
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/badtoken/pages/1/image").status_code == 404
+
+    # Commit with edited roll numbers and per-paper TA assignment.
+    commit = client.post(
+        f"/exams/{exam_id}/imports/auto-split/{token}/commit",
+        json={
+            "items": [
+                {"student_external_id": "2024CS01", "student_name": "Ann", "first_page": 1, "last_page": 2, "ta_ids": [ta_id]},
+                {"student_external_id": "2024CS02", "student_name": "", "first_page": 3, "last_page": 4, "ta_ids": []},
+            ]
+        },
+    )
+    assert commit.status_code == 200
+    res = commit.json()
+    assert res["created"] == 2
+    assert [i["ta_emails"] for i in res["items"]] == [["ta@x.io"], []]
+    # Staged PDF and job are cleaned up after commit.
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}").status_code == 404
+    subs = client.get(f"/submissions?exam_id={exam_id}").json()
+    assert len(subs) == 2
+
+
+def test_auto_split_commit_validation_and_discard(client, storage):
+    exam_id = make_exam(client)
+    token = client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={"file": ("combined.pdf", make_pdf(4), "application/pdf")},
+    ).json()["split_token"]
+
+    # Overlapping ranges -> 422
+    r = client.post(
+        f"/exams/{exam_id}/imports/auto-split/{token}/commit",
+        json={
+            "items": [
+                {"student_external_id": "A", "first_page": 1, "last_page": 3, "ta_ids": []},
+                {"student_external_id": "B", "first_page": 3, "last_page": 4, "ta_ids": []},
+            ]
+        },
+    )
+    assert r.status_code == 422
+
+    # Unknown TA -> 422
+    r2 = client.post(
+        f"/exams/{exam_id}/imports/auto-split/{token}/commit",
+        json={"items": [{"student_external_id": "A", "first_page": 1, "last_page": 4, "ta_ids": [9999]}]},
+    )
+    assert r2.status_code == 422
+
+    # Discard cleans up job and staged PDF.
+    assert client.delete(f"/exams/{exam_id}/imports/auto-split/{token}").status_code == 204
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}").status_code == 404
+
+
+def test_auto_split_retry_after_failure(client, storage):
+    from app.config import Settings
+    from app.grader.base import GraderError, GraderProvider
+    from app.grader.fake import FakeProvider
+    from app.jobs import worker
+    from tests.test_auth import TestSession
+
+    class FailSplit(GraderProvider):
+        name = "fail"
+        def _attempt(self, *a, **kw): ...
+        def propose_split(self, pages, model):
+            raise GraderError("boom")
+
+    exam_id = make_exam(client)
+    token = client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={"file": ("combined.pdf", make_pdf(2), "application/pdf")},
+    ).json()["split_token"]
+
+    assert worker.run_once(FailSplit(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()["status"] == "failed"
+
+    retried = client.post(f"/exams/{exam_id}/imports/auto-split/{token}/retry")
+    assert retried.status_code == 200 and retried.json()["status"] == "queued"
+
+    assert worker.run_once(FakeProvider(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()["status"] == "ready"
+
+
+def test_auto_split_with_allowed_roll_numbers_txt(client, storage):
+    from app.config import Settings
+    from app.grader.fake import FakeProvider
+    from app.jobs import worker
+    from tests.test_auth import TestSession
+
+    exam_id = make_exam(client)
+    # Empty txt -> 422
+    bad = client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={
+            "file": ("combined.pdf", make_pdf(4), "application/pdf"),
+            "roll_numbers_txt": ("rolls.txt", b"\n  \n", "text/plain"),
+        },
+    )
+    assert bad.status_code == 422
+
+    r = client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={
+            "file": ("combined.pdf", make_pdf(4), "application/pdf"),
+            "roll_numbers_txt": ("rolls.txt", b"2024CS01\n2024CS02\n2024CS01\n", "text/plain"),
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["allowed_roll_numbers"] == ["2024CS01", "2024CS02"]
+    token = body["split_token"]
+
+    assert worker.run_once(FakeProvider(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
+    polled = client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()
+    assert [s["student_external_id"] for s in polled["splits"]] == ["2024CS01", "2024CS02"]

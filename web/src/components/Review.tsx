@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
 import type { Grade, SubmissionDetail } from "../lib/types";
+import { pageScrollFor } from "../lib/dockedScroll";
 import { Alert, ConfidenceBadge, StatusBadge, fmt } from "./ui";
 
 interface Draft { score: string; feedback: string }
@@ -36,6 +37,33 @@ export default function Review({ id }: { id: number }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => { sheetRef.current?.scrollTo({ top: 0 }); }, [page]);
 
+  // Wheel over either pane: move the page first until the panes reach the top of the window, then the pane.
+  const gradesRef = useRef<HTMLElement>(null);
+  const ready = detail !== null;
+  const pageCount = detail?.pages.length ?? 0;
+  useEffect(() => {
+    const panes = [sheetRef.current, gradesRef.current].filter((p): p is HTMLElement => p !== null);
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) return; // pinch / ctrl-wheel zoom
+      const pane = e.currentTarget as HTMLElement;
+      const by = pageScrollFor({
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        paneScrollTop: pane.scrollTop,
+        pageY: window.scrollY,
+        pageMax: document.documentElement.scrollHeight - window.innerHeight,
+        viewportH: window.innerHeight,
+        nested: getComputedStyle(pane).overflowY !== "visible",
+      });
+      if (by) {
+        e.preventDefault();
+        window.scrollBy({ top: by });
+      }
+    };
+    panes.forEach((p) => p.addEventListener("wheel", onWheel, { passive: false }));
+    return () => panes.forEach((p) => p.removeEventListener("wheel", onWheel));
+  }, [ready, pageCount]);
+
   const pageOf = useMemo(() => {
     const m: Record<string, number> = {};
     detail?.pages.forEach((p) => p.question_numbers.forEach((q) => { m[q] ??= p.index; }));
@@ -61,7 +89,7 @@ export default function Review({ id }: { id: number }) {
   const scoreError = (g: Grade): string => {
     const n = Number(drafts[g.id].score);
     if (drafts[g.id].score.trim() === "" || Number.isNaN(n)) return "Enter a number";
-    if (n < 0 || n > g.max_points) return `Must be between 0 and ${g.max_points}`;
+    if (n < -g.max_points || n > g.max_points) return `Must be between ${-g.max_points} and ${g.max_points}`;
     return "";
   };
 
@@ -117,8 +145,15 @@ export default function Review({ id }: { id: number }) {
     if (pageOf[g.question_number]) setPage(pageOf[g.question_number]);
   };
 
+  const completeButton = (
+    <button className="primary" onClick={complete} disabled={!editable || pending > 0 || busy !== null || detail.status === "reviewed"}
+      title={pending ? `${pending} question(s) still need review` : ""}>
+      {detail.status === "reviewed" ? "Review complete" : "Complete review"}
+    </button>
+  );
+
   return (
-    <div className="stack review-root">
+    <div className="stack">
       <div className="row between">
         <div>
           <a href="/" className="small">← My queue</a>
@@ -131,10 +166,8 @@ export default function Review({ id }: { id: number }) {
           <StatusBadge status={detail.status} />
           <ConfidenceBadge value={detail.overall_confidence} label="overall" />
           <strong>{fmt(total)} / {fmt(maxTotal)} pts</strong>
-          <button className="primary" onClick={complete} disabled={!editable || pending > 0 || busy !== null || detail.status === "reviewed"}
-            title={pending ? `${pending} question(s) still need review` : ""}>
-            {detail.status === "reviewed" ? "Review complete" : "Complete review"}
-          </button>
+          <a className="btn" href={`/api/submissions/${id}/export.pdf`}>Export PDF</a>
+          {completeButton}
         </div>
       </div>
 
@@ -170,7 +203,7 @@ export default function Review({ id }: { id: number }) {
           )}
         </section>
 
-        <section className="stack grades" aria-label="Grades">
+        <section className="stack grades" aria-label="Grades" ref={gradesRef}>
           {detail.grades.map((g) => {
             const d = drafts[g.id];
             const err = scoreError(g);
@@ -191,19 +224,20 @@ export default function Review({ id }: { id: number }) {
                 {(g.expected_answer || g.criteria.length > 0) && (
                   <details className="small" onClick={(e) => e.stopPropagation()}>
                     <summary>Rubric</summary>
-                    {g.expected_answer && <p><strong>Expected:</strong> {g.expected_answer}</p>}
+                    {g.expected_answer && <div className="multiline"><strong>Expected:</strong>{"\n"}{g.expected_answer}</div>}
                     <ul>{g.criteria.map((c, i) => <li key={i}>{c.description} ({fmt(c.points)})</li>)}</ul>
                   </details>
                 )}
-                <p className="small" style={{ margin: ".5rem 0" }}>
-                  <strong>Claude:</strong> {fmt(g.ai_score)} pts — {g.ai_feedback}
-                </p>
+                <div className="small" style={{ margin: ".5rem 0" }}>
+                  <strong>Claude:</strong> {fmt(g.ai_score)} pts
+                  <div className="multiline claude-feedback">{g.ai_feedback}</div>
+                </div>
 
                 <div onClick={(e) => e.stopPropagation()}>
                   <div className="grid2">
                     <div className="field">
                       <label htmlFor={`s-${g.id}`}>Score</label>
-                      <input id={`s-${g.id}`} type="number" step="0.5" min={0} max={g.max_points} value={d.score}
+                      <input id={`s-${g.id}`} type="number" step="0.5" min={-g.max_points} max={g.max_points} value={d.score}
                         disabled={!editable} aria-invalid={!!err} onChange={(e) => setDraft(g, { score: e.target.value })} />
                       {err && <span className="small" style={{ color: "var(--bad)" }}>{err}</span>}
                     </div>
@@ -229,6 +263,10 @@ export default function Review({ id }: { id: number }) {
               </article>
             );
           })}
+          <div className="card row between grades-footer">
+            <span><strong>{fmt(total)} / {fmt(maxTotal)} pts</strong> · {pending ? `${pending} left to check` : "all checked"}</span>
+            {completeButton}
+          </div>
         </section>
       </div>
     </div>

@@ -32,9 +32,14 @@ class PageResult(BaseModel):
     )
 
 
+def score_floor(max_points: float) -> float:
+    """Lowest mark a question can carry. Negative marking is allowed, down to minus the question's maximum."""
+    return -max_points
+
+
 class QuestionResult(BaseModel):
     question_number: str
-    score: float = Field(ge=0)
+    score: float  # may be negative (negative marking); range is checked against the rubric in check_result
     feedback: str
     confidence: float = Field(
         ge=0, le=1, description="Likelihood that a careful human grader would agree with this score"
@@ -47,6 +52,18 @@ class GradingResult(BaseModel):
     pages: list[PageResult]
     questions: list[QuestionResult]
     overall_confidence: float = Field(ge=0, le=1)
+
+
+class SplitProposal(BaseModel):
+    student_external_id: str = Field(description="Student roll number or ID extracted from the pages; empty if unreadable")
+    student_name: str = Field(default="", description="Student name if visible, else empty string")
+    first_page: int = Field(ge=1, description="1-based inclusive start page")
+    last_page: int = Field(ge=1, description="1-based inclusive end page")
+    confidence: float = Field(ge=0, le=1, description="Confidence in the split boundaries and roll number")
+
+
+class SplitResult(BaseModel):
+    splits: list[SplitProposal] = Field(min_length=1)
 
 
 class GradingOutcome(BaseModel):
@@ -90,9 +107,38 @@ def check_result(result: GradingResult, rubric: RubricSpec, n_pages: int) -> Non
         seen.add(q.question_number)
         if q.score > spec.max_points:
             fail(f"Question {q.question_number}: score {q.score} exceeds max {spec.max_points}")
+        if q.score < score_floor(spec.max_points):
+            fail(f"Question {q.question_number}: score {q.score} is below the minimum {score_floor(spec.max_points):g}")
     missing = sorted(set(by_number) - seen)
     if missing:
         fail(f"Missing grades for questions {missing}")
+
+
+def check_split_result(
+    result: SplitResult, n_pages: int, allowed_roll_numbers: list[str] | None = None
+) -> None:
+    """Validate proposed PDF split boundaries. Raises retryable GraderError."""
+
+    def fail(msg: str):
+        raise GraderError(msg, retryable=True)
+
+    if not result.splits:
+        fail("Expected at least one paper split")
+
+    result.splits.sort(key=lambda s: (s.first_page, s.last_page))
+    last_end = 0
+    for sp in result.splits:
+        if sp.first_page < 1 or sp.last_page < sp.first_page or sp.last_page > n_pages:
+            fail(f"Split range {sp.first_page}-{sp.last_page} is invalid for {n_pages} page(s)")
+        if sp.first_page <= last_end:
+            fail(f"Split range {sp.first_page}-{sp.last_page} overlaps another split")
+        last_end = sp.last_page
+
+    if allowed_roll_numbers:
+        allowed = set(allowed_roll_numbers)
+        unknown = [sp.student_external_id for sp in result.splits if sp.student_external_id and sp.student_external_id not in allowed]
+        if unknown:
+            fail(f"Roll number(s) not in allowed list: {unknown}")
 
 
 class GraderProvider(ABC):
@@ -134,6 +180,12 @@ class GraderProvider(ABC):
                 last, feedback = e, str(e)
         assert last is not None
         raise GraderError(f"Gave up after {self.max_attempts} attempts: {last}")
+
+    def propose_split(
+        self, pages: list[PageImage], model: str, allowed_roll_numbers: list[str] | None = None
+    ) -> SplitResult:
+        """Propose how a combined PDF's pages split into individual student papers."""
+        raise GraderError(f"Auto-split is not supported by provider {self.name!r}")
 
 
 def validation_message(e: ValidationError) -> str:

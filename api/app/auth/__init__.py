@@ -14,11 +14,20 @@ COOKIE_NAME = "session"
 
 
 def hash_password(password: str) -> str:
+    """Hash a password. A blank password means "no password": the account can only sign in another way
+    (Google) and is stored as an empty hash, which verify_password never accepts."""
+    if password == "":
+        return ""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=get_settings().bcrypt_rounds)).decode()
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
+    if not password or not hashed:  # blank never matches, whatever is stored
+        return False
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except ValueError:  # malformed stored hash
+        return False
 
 
 def create_token(user: User) -> str:

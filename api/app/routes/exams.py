@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth import current_user, require_admin
 from app import deletion
 from app.db import get_db
-from app.models import Exam, Question, Role, Rubric, Submission, User, submission_tas
+from app.models import Exam, Question, Role, Rubric, SplitJob, Submission, User, submission_tas
 from app.storage import Storage, get_storage
 
 router = APIRouter(prefix="/exams", tags=["exams"])
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/exams", tags=["exams"])
 
 class Criterion(BaseModel):
     description: str
-    points: float = Field(ge=0)
+    points: float  # negative = a deduction (negative marking)
 
 
 class QuestionIn(BaseModel):
@@ -60,7 +60,7 @@ def _validate_rubric(body: RubricIn) -> None:
     if len(set(numbers)) != len(numbers):
         raise HTTPException(422, "Duplicate question numbers")
     for q in body.questions:
-        if sum(c.points for c in q.criteria) > q.max_points:
+        if sum(c.points for c in q.criteria if c.points > 0) > q.max_points:
             raise HTTPException(422, f"Criteria points exceed max_points for question {q.number}")
 
 
@@ -165,9 +165,11 @@ def delete_exam(
             "Deleting the exam permanently deletes them too. Pass force=true to delete it anyway.",
         )
     keys = deletion.delete_submissions(db, ids)
+    split_keys = list(db.scalars(select(SplitJob.pdf_path).where(SplitJob.exam_id == exam_id)))
+    db.execute(delete(SplitJob).where(SplitJob.exam_id == exam_id))
     rubric_ids = select(Rubric.id).where(Rubric.exam_id == exam_id)
     db.execute(delete(Question).where(Question.rubric_id.in_(rubric_ids)))
     db.execute(delete(Rubric).where(Rubric.exam_id == exam_id))
     db.execute(delete(Exam).where(Exam.id == exam_id))
     db.commit()
-    deletion.purge_files(storage, keys)
+    deletion.purge_files(storage, [*keys, *split_keys])

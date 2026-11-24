@@ -4,7 +4,7 @@ export type SubmissionStatus =
 export type GradeStatus = "pending" | "reviewed" | "overridden";
 
 export interface User { id: number; email: string; name: string; role: Role }
-export interface UserAdmin extends User { active: boolean; assigned_papers: number; reviewed_grades: number }
+export interface UserAdmin extends User { active: boolean; has_password: boolean; assigned_papers: number; reviewed_grades: number }
 export interface Exam { id: number; name: string; model_override: string | null }
 export interface Criterion { description: string; points: number }
 export interface Question {
@@ -64,3 +64,22 @@ export interface ImportItem {
   submission_id: number | null;
 }
 export interface ImportResult { dry_run: boolean; created: number; items: ImportItem[] }
+
+export interface ProposedSplit {
+  student_external_id: string;
+  student_name: string;
+  first_page: number;
+  last_page: number;
+  confidence: number | null;
+}
+export type SplitJobStatus = "queued" | "processing" | "ready" | "failed";
+export interface AutoSplitResult {
+  split_token: string;
+  filename: string;
+  page_count: number;
+  status: SplitJobStatus;
+  error: string | null;
+  allowed_roll_numbers: string[];
+  splits: ProposedSplit[];
+  existing_student_ids: string[];
+}

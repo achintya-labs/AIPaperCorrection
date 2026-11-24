@@ -15,7 +15,7 @@ function problems(qs: Question[]): string[] {
     else if (seen.has(n)) out.push(`Question number ${n} is used twice`);
     seen.add(n);
     if (!(q.max_points > 0)) out.push(`Question ${n || "?"}: max points must be above 0`);
-    const sum = q.criteria.reduce((s, c) => s + (Number(c.points) || 0), 0);
+    const sum = q.criteria.reduce((s, c) => s + Math.max(0, Number(c.points) || 0), 0);
     if (sum > q.max_points) out.push(`Question ${n || "?"}: criteria add up to ${fmt(sum)}, above max ${fmt(q.max_points)}`);
   });
   return out;
@@ -117,7 +117,7 @@ export default function RubricEditor({ examId }: { examId: number }) {
             <div className="row" key={k} style={{ marginBottom: ".4rem" }}>
               <input className="grow" type="text" aria-label="Criterion description" value={c.description} placeholder="What earns these points"
                 onChange={(e) => update(i, { criteria: q.criteria.map((x, j) => (j === k ? { ...x, description: e.target.value } : x)) })} />
-              <input style={{ width: 90 }} type="number" min={0} step="0.5" aria-label="Criterion points" value={c.points}
+              <input style={{ width: 90 }} type="number" step="0.5" aria-label="Criterion points (negative = deduction)" value={c.points}
                 onChange={(e) => update(i, { criteria: q.criteria.map((x, j) => (j === k ? { ...x, points: Number(e.target.value) } : x)) })} />
               <button className="danger" aria-label="Remove criterion" onClick={() => update(i, { criteria: q.criteria.filter((_, j) => j !== k) })}>×</button>
             </div>

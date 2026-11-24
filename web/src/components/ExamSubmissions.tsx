@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
-import type { Submission, User } from "../lib/types";
+import type { Submission, UserAdmin } from "../lib/types";
 import { deletePaperFlow } from "../lib/actions";
-import { Alert, ConfidenceBadge, StatusBadge } from "./ui";
+import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
+import TaMultiSelect from "./TaMultiSelect";
 
 export default function ExamSubmissions({ examId }: { examId: number }) {
   const [subs, setSubs] = useState<Submission[] | null>(null);
-  const [tas, setTas] = useState<User[]>([]);
+  const [tas, setTas] = useState<UserAdmin[]>([]);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [q, setQ] = useState("");
@@ -20,7 +21,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   );
   useEffect(() => {
     load();
-    api<User[]>("/auth/users").then((u) => setTas(u.filter((x) => x.role === "ta"))).catch((e) => setError(errMsg(e)));
+    api<UserAdmin[]>("/auth/users").then((u) => setTas(u.filter((x) => x.active && x.role === "ta"))).catch((e) => setError(errMsg(e)));
   }, [load]);
 
   // Poll while anything is in flight.
@@ -31,7 +32,8 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     return () => clearInterval(t);
   }, [active, load]);
 
-  const taName = (id: number) => tas.find((t) => t.id === id)?.email ?? `#${id}`;
+  const taOf = (id: number) => tas.find((t) => t.id === id);
+  const taText = (id: number) => { const t = taOf(id); return t ? `${t.name} ${t.email}` : `#${id}`; };
 
   async function queueWaiting() {
     setError(""); setInfo("");
@@ -79,7 +81,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   }
 
   const visible = (subs ?? []).filter((s) =>
-    matchesQuery([s.student.external_id, s.student.name, s.status.replace(/_/g, " "), ...s.ta_ids.map(taName)], q),
+    matchesQuery([s.student.external_id, s.student.name, s.status.replace(/_/g, " "), ...s.ta_ids.map(taText)], q),
   );
 
   return (
@@ -89,6 +91,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         <div className="row">
           <button onClick={queueWaiting}>Queue waiting &amp; failed</button>
           <a className="btn" href={`/api/exams/${examId}/export.csv`}>Export grades (CSV)</a>
+          <a className="btn" href={`/api/exams/${examId}/export.zip`}>Export PDFs (ZIP)</a>
         </div>
       </div>
       {error && <Alert tone="bad">{error}</Alert>}
@@ -97,7 +100,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         <SearchBox value={q} onChange={setQ} label="Search papers" placeholder="Search student, TA, status"
           shown={visible.length} total={subs.length} />
       )}
-      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+      <div className="card" style={{ padding: 0, overflow: "visible" }}>
         {!subs ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : subs.length === 0 ? (
           <p className="muted" style={{ padding: "1rem" }}>No papers imported yet.</p>
         ) : visible.length === 0 ? (
@@ -112,30 +115,30 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
                   <td><StatusBadge status={s.status} /></td>
                   <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
                   <td><ConfidenceBadge value={s.min_confidence} label="min" /></td>
-                  <td className="small">
+                  <td className="tas-cell">
                     {editing?.id === s.id ? (
-                      <div className="stack">
-                        {tas.map((t) => (
-                          <label key={t.id} className="check">
-                            <input type="checkbox" checked={editing.ids.has(t.id)}
-                              onChange={(e) => {
-                                const ids = new Set(editing.ids);
-                                e.target.checked ? ids.add(t.id) : ids.delete(t.id);
-                                setEditing({ id: s.id, ids });
-                              }} /> {t.email}
-                          </label>
-                        ))}
+                      <div className="stack" style={{ minWidth: 220 }}>
+                        <TaMultiSelect
+                          tas={tas}
+                          selected={[...editing.ids]}
+                          onChange={(ids) => setEditing({ id: s.id, ids: new Set(ids) })}
+                        />
                         <div className="row"><button className="primary" onClick={saveAssignment}>Save</button><button onClick={() => setEditing(null)}>Cancel</button></div>
                       </div>
                     ) : (
-                      <>
-                        {s.ta_ids.length ? s.ta_ids.map(taName).join(", ") : <span className="muted">unassigned</span>}{" "}
-                        <button className="link" onClick={() => setEditing({ id: s.id, ids: new Set(s.ta_ids) })}>edit</button>
-                      </>
+                      <div className="tas-view">
+                        <div className="tas-list">
+                          {s.ta_ids.length
+                            ? s.ta_ids.map((id) => taOf(id) ? <Person key={id} user={taOf(id)} /> : <span key={id} className="muted">#{id}</span>)
+                            : <span className="muted">unassigned</span>}
+                        </div>
+                        <button className="btn-sm" onClick={() => setEditing({ id: s.id, ids: new Set(s.ta_ids) })}>Edit</button>
+                      </div>
                     )}
                   </td>
                   <td>
                     <div className="row">
+                      <a className="btn" href={`/api/submissions/${s.id}/export.pdf`}>Export PDF</a>
                       {!["queued", "grading"].includes(s.status) && s.status !== "uploaded" && (
                         <button onClick={() => regrade(s)}>Regrade</button>
                       )}

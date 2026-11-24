@@ -40,6 +40,13 @@ class GradeStatus(str, enum.Enum):
     overridden = "overridden"
 
 
+class SplitJobStatus(str, enum.Enum):
+    queued = "queued"
+    processing = "processing"
+    ready = "ready"
+    failed = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -180,4 +187,23 @@ class GradingRun(Base):
     model: Mapped[str] = mapped_column(String(100))
     raw_output: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class SplitJob(Base):
+    __tablename__ = "split_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    exam_id: Mapped[int] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    pdf_path: Mapped[str] = mapped_column(String(500))
+    page_count: Mapped[int] = mapped_column(Integer)
+    status: Mapped[SplitJobStatus] = mapped_column(
+        Enum(SplitJobStatus), default=SplitJobStatus.queued, index=True
+    )
+    allowed_roll_numbers: Mapped[list] = mapped_column(JSON, default=list)
+    splits: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

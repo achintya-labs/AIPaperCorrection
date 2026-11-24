@@ -17,9 +17,15 @@ class Settings(BaseSettings):
     bcrypt_rounds: int = Field(12, ge=4, le=31)
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:4321"
+    # Sign in with Google. All three must be set to enable it; PUBLIC_BASE_URL is what users browse to
+    # (e.g. https://grader.school.edu), used to build the OAuth redirect URI.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    public_base_url: str = ""
 
     grader_provider: str = "claude_cli"
     claude_model: str = "claude-sonnet-5-5"
+    claude_split_model: str = ""
     grader_timeout_seconds: int = 600
     grader_max_attempts: int = 2
     claude_bin: str = "claude"

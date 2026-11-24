@@ -6,6 +6,8 @@ from app.grader.base import (
     PageResult,
     QuestionResult,
     RubricSpec,
+    SplitProposal,
+    SplitResult,
 )
 
 
@@ -42,3 +44,28 @@ class FakeProvider(GraderProvider):
             overall_confidence=0.5,
         )
         return GradingOutcome(result=result, raw_output="fake", model=model or "fake")
+
+    def propose_split(
+        self, pages: list[PageImage], model: str, allowed_roll_numbers: list[str] | None = None
+    ) -> SplitResult:
+        if not pages:
+            return SplitResult(splits=[])
+        step = 2 if len(pages) > 1 else 1
+        splits: list[SplitProposal] = []
+        for idx, start in enumerate(range(1, len(pages) + 1, step), start=1):
+            end = min(start + step - 1, len(pages))
+            sid = (
+                allowed_roll_numbers[idx - 1]
+                if allowed_roll_numbers and idx - 1 < len(allowed_roll_numbers)
+                else ("" if allowed_roll_numbers else f"s{idx}")
+            )
+            splits.append(
+                SplitProposal(
+                    student_external_id=sid,
+                    student_name="",
+                    first_page=start,
+                    last_page=end,
+                    confidence=0.8,
+                )
+            )
+        return SplitResult(splits=splits)

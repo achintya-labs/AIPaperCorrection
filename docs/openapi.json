@@ -26,6 +26,149 @@
         "title": "AssignMode",
         "type": "string"
       },
+      "AutoSplitCommitIn": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AutoSplitItemIn"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AutoSplitCommitIn",
+        "type": "object"
+      },
+      "AutoSplitItemIn": {
+        "properties": {
+          "first_page": {
+            "minimum": 1.0,
+            "title": "First Page",
+            "type": "integer"
+          },
+          "last_page": {
+            "minimum": 1.0,
+            "title": "Last Page",
+            "type": "integer"
+          },
+          "student_external_id": {
+            "title": "Student External Id",
+            "type": "string"
+          },
+          "student_name": {
+            "default": "",
+            "title": "Student Name",
+            "type": "string"
+          },
+          "ta_ids": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Ta Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "student_external_id",
+          "first_page",
+          "last_page"
+        ],
+        "title": "AutoSplitItemIn",
+        "type": "object"
+      },
+      "AutoSplitResult": {
+        "properties": {
+          "allowed_roll_numbers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Roll Numbers",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "existing_student_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Existing Student Ids",
+            "type": "array"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "split_token": {
+            "title": "Split Token",
+            "type": "string"
+          },
+          "splits": {
+            "items": {
+              "$ref": "#/components/schemas/ProposedSplit"
+            },
+            "title": "Splits",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SplitJobStatus"
+          }
+        },
+        "required": [
+          "split_token",
+          "filename",
+          "page_count",
+          "status",
+          "splits",
+          "existing_student_ids"
+        ],
+        "title": "AutoSplitResult",
+        "type": "object"
+      },
+      "Body_auto_split_import_exams__exam_id__imports_auto_split_post": {
+        "properties": {
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "roll_numbers_txt": {
+            "anyOf": [
+              {
+                "format": "binary",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roll Numbers Txt"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_auto_split_import_exams__exam_id__imports_auto_split_post",
+        "type": "object"
+      },
       "Body_import_submissions_exams__exam_id__imports_post": {
         "properties": {
           "assign": {
@@ -83,7 +226,6 @@
             "type": "string"
           },
           "points": {
-            "minimum": 0.0,
             "title": "Points",
             "type": "number"
           }
@@ -282,7 +424,6 @@
             "type": "string"
           },
           "final_score": {
-            "minimum": 0.0,
             "title": "Final Score",
             "type": "number"
           },
@@ -488,6 +629,58 @@
         "title": "PasswordReset",
         "type": "object"
       },
+      "ProposedSplit": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "first_page": {
+            "title": "First Page",
+            "type": "integer"
+          },
+          "last_page": {
+            "title": "Last Page",
+            "type": "integer"
+          },
+          "student_external_id": {
+            "title": "Student External Id",
+            "type": "string"
+          },
+          "student_name": {
+            "default": "",
+            "title": "Student Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "student_external_id",
+          "first_page",
+          "last_page"
+        ],
+        "title": "ProposedSplit",
+        "type": "object"
+      },
+      "ProvidersOut": {
+        "properties": {
+          "google": {
+            "title": "Google",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "google"
+        ],
+        "title": "ProvidersOut",
+        "type": "object"
+      },
       "QuestionIn": {
         "properties": {
           "criteria": {
@@ -657,6 +850,16 @@
         ],
         "title": "RubricOut",
         "type": "object"
+      },
+      "SplitJobStatus": {
+        "enum": [
+          "queued",
+          "processing",
+          "ready",
+          "failed"
+        ],
+        "title": "SplitJobStatus",
+        "type": "string"
       },
       "StudentIn": {
         "properties": {
@@ -888,6 +1091,10 @@
             "title": "Email",
             "type": "string"
           },
+          "has_password": {
+            "title": "Has Password",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "integer"
@@ -910,6 +1117,7 @@
           "name",
           "role",
           "active",
+          "has_password",
           "assigned_papers",
           "reviewed_grades"
         ],
@@ -1038,6 +1246,122 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/auth/google/callback": {
+      "get": {
+        "description": "Google redirects here. Signs in the existing, active user whose email Google has verified.\nEvery failure redirects to /login?error=... with a generic code (no hint whether an account exists).",
+        "operationId": "google_callback_auth_google_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "oauth_tx",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Oauth Tx"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/google/login": {
+      "get": {
+        "description": "Start Google sign-in: sets a short-lived signed cookie and redirects to Google.",
+        "operationId": "google_login_auth_google_login_get",
+        "responses": {
+          "302": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/auth/login": {
       "post": {
         "operationId": "login_auth_login_post",
@@ -1190,6 +1514,28 @@
           }
         },
         "summary": "Change Own Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/providers": {
+      "get": {
+        "description": "Which sign-in methods are configured, so the login page knows whether to show the Google button.",
+        "operationId": "providers_auth_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidersOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Providers",
         "tags": [
           "auth"
         ]
@@ -1436,7 +1782,7 @@
     },
     "/auth/users/{user_id}/password": {
       "put": {
-        "description": "Admin sets another user's password (e.g. they forgot it, or the account may be compromised).\nAll of that user's sessions are signed out. For your own account use PUT /auth/me/password, which\nneeds the current password, so a hijacked admin session can't quietly take the account over.",
+        "description": "Admin sets a user's password directly without requiring the current password.\nAll other sessions of that user are signed out; if resetting your own, this session stays signed in.",
         "operationId": "reset_user_password_auth_users__user_id__password_put",
         "parameters": [
           {
@@ -1790,6 +2136,62 @@
         ]
       }
     },
+    "/exams/{exam_id}/export.zip": {
+      "get": {
+        "operationId": "export_exam_pdfs_exams__exam_id__export_zip_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Exam Pdfs",
+        "tags": [
+          "review"
+        ]
+      }
+    },
     "/exams/{exam_id}/imports": {
       "post": {
         "description": "Two layouts:\n  - one PDF per student, named `<student_id>.pdf`\n  - one combined PDF + a CSV giving each student's `first_page`/`last_page`\nCall with dry_run=true first to preview, then repeat with dry_run=false to commit.",
@@ -1854,6 +2256,478 @@
           }
         },
         "summary": "Import Submissions",
+        "tags": [
+          "import"
+        ]
+      }
+    },
+    "/exams/{exam_id}/imports/auto-split": {
+      "get": {
+        "operationId": "list_auto_splits_exams__exam_id__imports_auto_split_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AutoSplitResult"
+                  },
+                  "title": "Response List Auto Splits Exams  Exam Id  Imports Auto Split Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Auto Splits",
+        "tags": [
+          "import"
+        ]
+      },
+      "post": {
+        "description": "Upload one combined PDF and queue a background job for Claude to propose splits & roll numbers.",
+        "operationId": "auto_split_import_exams__exam_id__imports_auto_split_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_auto_split_import_exams__exam_id__imports_auto_split_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSplitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auto Split Import",
+        "tags": [
+          "import"
+        ]
+      }
+    },
+    "/exams/{exam_id}/imports/auto-split/{split_token}": {
+      "delete": {
+        "operationId": "delete_auto_split_exams__exam_id__imports_auto_split__split_token__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "split_token",
+            "required": true,
+            "schema": {
+              "title": "Split Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Auto Split",
+        "tags": [
+          "import"
+        ]
+      },
+      "get": {
+        "operationId": "get_auto_split_exams__exam_id__imports_auto_split__split_token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "split_token",
+            "required": true,
+            "schema": {
+              "title": "Split Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSplitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Auto Split",
+        "tags": [
+          "import"
+        ]
+      }
+    },
+    "/exams/{exam_id}/imports/auto-split/{split_token}/commit": {
+      "post": {
+        "operationId": "commit_auto_split_import_exams__exam_id__imports_auto_split__split_token__commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "split_token",
+            "required": true,
+            "schema": {
+              "title": "Split Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSplitCommitIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Commit Auto Split Import",
+        "tags": [
+          "import"
+        ]
+      }
+    },
+    "/exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image": {
+      "get": {
+        "operationId": "auto_split_page_image_exams__exam_id__imports_auto_split__split_token__pages__index__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "split_token",
+            "required": true,
+            "schema": {
+              "title": "Split Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "index",
+            "required": true,
+            "schema": {
+              "title": "Index",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auto Split Page Image",
+        "tags": [
+          "import"
+        ]
+      }
+    },
+    "/exams/{exam_id}/imports/auto-split/{split_token}/retry": {
+      "post": {
+        "operationId": "retry_auto_split_exams__exam_id__imports_auto_split__split_token__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "split_token",
+            "required": true,
+            "schema": {
+              "title": "Split Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSplitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Auto Split",
         "tags": [
           "import"
         ]
@@ -2677,6 +3551,62 @@
           }
         },
         "summary": "Submission Detail",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/export.pdf": {
+      "get": {
+        "operationId": "export_submission_pdf_submissions__submission_id__export_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Submission Pdf",
         "tags": [
           "review"
         ]
