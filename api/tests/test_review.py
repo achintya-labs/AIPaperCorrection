@@ -300,3 +300,24 @@ def test_taller_crops_put_fewer_pages_on_a_sheet():
 def test_a_page_that_is_not_an_image_is_reported_by_number():
     with pytest.raises(pdf_mod.PdfError, match="Page 2"):
         pdf_mod.contact_sheets([(1, _png_page("a")), (2, b"not a png")])
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_export_keeps_the_orientation_of_rotated_scans(rotation):
+    """A scan marked /Rotate (common from scanners and PDF viewers) must look the same in the export as it does in
+    the app. show_pdf_page alone dropped the rotation, so these came out upside down or sideways."""
+    with fitz.open() as d:
+        p = d.new_page(width=400, height=300)
+        p.insert_text((30, 60), "HELLO top-left", fontsize=24)
+        p.insert_text((250, 280), "bottom-right", fontsize=14)
+        p.set_rotation(rotation)
+        raw = d.tobytes()
+    with fitz.open(stream=raw, filetype="pdf") as src:
+        shown = src[0].get_pixmap(dpi=40)  # what the app renders and Claude sees
+        w, h = src[0].rect.width, src[0].rect.height
+    out = pdf_mod.annotate_pdf(raw, {1: [pdf_mod.QuestionComment("1", 1, 2, "fb")]})
+    with fitz.open(stream=out, filetype="pdf") as doc:
+        exported = doc[0].get_pixmap(dpi=40, clip=fitz.Rect(0, 0, w, h))  # the answer-sheet part, not the margin
+    assert (shown.width, shown.height) == (exported.width, exported.height)
+    diff = sum(abs(a - b) for a, b in zip(shown.samples, exported.samples)) / len(shown.samples)
+    assert diff < 0.5, f"export differs from the page as shown (mean pixel difference {diff:.2f})"

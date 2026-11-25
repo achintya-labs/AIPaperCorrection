@@ -125,6 +125,12 @@ def annotate_pdf(data: bytes, page_comments: dict[int, list[QuestionComment]], m
     pad = 12.0
     box_w = margin_w - 2 * pad
     with _lock, _open(data) as src, fitz.open() as dst:
+        # show_pdf_page ignores a page's /Rotate, so a scan that a viewer (or the scanner) marked "rotated 180" would come
+        # out upside down even though the app's page images, which do honour it, look right. Bake the rotation into the
+        # in-memory copy first; nothing is saved back to the stored original.
+        for src_page in src:
+            if src_page.rotation:
+                src_page.remove_rotation()
         for idx, src_page in enumerate(src, start=1):
             orig_w = src_page.rect.width
             orig_h = src_page.rect.height
