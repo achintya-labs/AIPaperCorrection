@@ -1,7 +1,9 @@
 import csv
 import io
 import re
+import threading
 import uuid
+from collections import OrderedDict
 from enum import Enum
 from pathlib import PurePath
 from typing import Literal
@@ -389,6 +391,44 @@ def retry_auto_split(exam_id: int, split_token: str, db: Session = Depends(get_d
     db.commit()
     db.refresh(job)
     return _split_out(job, _existing_student_ids(db, exam_id))
+
+
+# Small previews are rendered at a low resolution as JPEG (about 15 KB instead of 770 KB per page) and remembered in
+# memory, so a strip of 150 thumbnails costs a few MB, not 100+ MB, and a second look is free. The browser also keeps
+# them for a day (the token never changes what page N looks like).
+THUMB_DPI = 30
+THUMB_QUALITY = 60
+_THUMB_MAX = 2000
+_thumbs: "OrderedDict[tuple[str, int], bytes]" = OrderedDict()
+_thumbs_lock = threading.Lock()
+
+
+@router.get("/exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/thumb")
+def auto_split_page_thumb(
+    exam_id: int,
+    split_token: str,
+    index: int,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    job = _get_split_job(db, exam_id, split_token)
+    key = (split_token, index)
+    with _thumbs_lock:
+        jpeg = _thumbs.get(key)
+        if jpeg is not None:
+            _thumbs.move_to_end(key)
+    if jpeg is None:
+        if not storage.exists(job.pdf_path):
+            raise HTTPException(404, "Split session not found")
+        try:
+            jpeg = pdf.render_page(storage.read(job.pdf_path), index, dpi=THUMB_DPI, jpeg_quality=THUMB_QUALITY)
+        except pdf.PdfError as e:
+            raise HTTPException(404, str(e))
+        with _thumbs_lock:
+            _thumbs[key] = jpeg
+            while len(_thumbs) > _THUMB_MAX:
+                _thumbs.popitem(last=False)
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image")

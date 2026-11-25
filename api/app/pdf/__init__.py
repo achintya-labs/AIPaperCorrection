@@ -64,12 +64,13 @@ def render_pages(data: bytes, dpi: int = 150) -> list[bytes]:
         return [page.get_pixmap(dpi=dpi).tobytes("png") for page in doc]
 
 
-def render_page(data: bytes, index: int, dpi: int = 110) -> bytes:
-    """Return a single 1-based page as PNG bytes."""
+def render_page(data: bytes, index: int, dpi: int = 110, jpeg_quality: int | None = None) -> bytes:
+    """Return a single 1-based page as PNG bytes, or as JPEG when `jpeg_quality` is given (far smaller)."""
     with _lock, _open(data) as doc:
         if index < 1 or index > doc.page_count:
             raise PdfError(f"Page {index} is invalid for a {doc.page_count}-page PDF")
-        return doc[index - 1].get_pixmap(dpi=dpi).tobytes("png")
+        pix = doc[index - 1].get_pixmap(dpi=dpi)
+        return pix.tobytes("jpeg", jpg_quality=jpeg_quality) if jpeg_quality else pix.tobytes("png")
 
 
 @dataclass(frozen=True)

@@ -477,8 +477,10 @@ export default function ImportWizard({ examId }: { examId: number }) {
                               <button key={pNum} type="button" className={`pagethumb${isStart ? " start" : ""}`}
                                 onClick={() => setZoomPage(pNum)} title={`Click to inspect page ${pNum}`}>
                                 <img
-                                  src={`/api/exams/${examId}/imports/auto-split/${autoResult.split_token}/pages/${pNum}/image`}
+                                  src={`/api/exams/${examId}/imports/auto-split/${autoResult.split_token}/pages/${pNum}/thumb`}
                                   alt={`Page ${pNum}`}
+                                  loading="lazy"
+                                  decoding="async"
                                 />
                                 <span className="cap">p.{pNum}{isStart ? " · start" : isEnd ? " · end" : ""}</span>
                               </button>

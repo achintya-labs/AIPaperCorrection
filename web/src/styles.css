@@ -252,7 +252,8 @@ input[type="file"]::file-selector-button:hover { border-color: var(--accent); }
 .pagestrip { display: flex; gap: .6rem; overflow-x: auto; padding: .2rem .2rem .5rem; }
 .pagethumb { flex: none; display: grid; gap: .3rem; padding: .3rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
 .pagethumb.start { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.pagethumb img { display: block; height: 120px; width: auto; border-radius: 3px; background: #fff; }
+/* A fixed box (about an A4 page) so lazy-loaded thumbnails hold their place and only the ones in view are fetched. */
+.pagethumb img { display: block; height: 120px; width: 85px; object-fit: contain; border-radius: 3px; background: #fff; }
 .pagethumb .cap { font-size: .75rem; color: var(--muted); }
 .pagethumb.start .cap { color: var(--text); font-weight: 600; }
 

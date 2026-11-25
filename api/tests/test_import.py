@@ -191,6 +191,16 @@ def test_auto_split_propose_preview_and_commit(client, storage):
     assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/9/image").status_code == 404
     assert client.get(f"/exams/{exam_id}/imports/auto-split/badtoken/pages/1/image").status_code == 404
 
+    # The strip of previews uses small JPEG thumbnails, far lighter than the full page, remembered after the first look.
+    thumb = client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/1/thumb")
+    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/jpeg" and thumb.content[:2] == b"\xff\xd8"
+    assert len(thumb.content) < len(img.content) and "max-age=86400" in thumb.headers["cache-control"]
+    from unittest.mock import patch
+    with patch("app.routes.imports.pdf.render_page", side_effect=AssertionError("should come from the cache")):
+        assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/1/thumb").content == thumb.content
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}/pages/9/thumb").status_code == 404
+    assert client.get(f"/exams/{exam_id}/imports/auto-split/badtoken/pages/1/thumb").status_code == 404
+
     # Commit with edited roll numbers and per-paper TA assignment.
     commit = client.post(
         f"/exams/{exam_id}/imports/auto-split/{token}/commit",

@@ -310,6 +310,9 @@ s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.pa
   a minute (it used to take one model round-trip per page, minutes). Very long PDFs go in overlapping chunks that are
   merged. If roll numbers sit low on your pages, raise `SPLIT_TOP_FRACTION` (up to 1.0). If a split fails, the job shows
   the reason and can be retried.
+- **Page thumbnails** in the auto-split proposal are small JPEGs (30 dpi, about 15 KB each) that the browser loads only as they
+  scroll into view; the full-resolution page loads when you click one to zoom. The server keeps up to 2000 recent
+  thumbnails in memory.
 - **PDF export** (one paper, or all as a ZIP): each page is widened to carry the question comments in the margin, and a
   **marks summary page** is inserted first, the same size as the pages after it: exam name, student, total marks
   obtained out of the maximum, and a breakdown per section. A section is the part of the question number before the

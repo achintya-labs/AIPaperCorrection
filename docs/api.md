@@ -374,6 +374,12 @@ Admin. Discards a staged auto-split job and deletes its temporary PDF. **204**. 
 ### `POST /exams/{exam_id}/imports/auto-split/{split_token}/retry`
 Admin. Requeues a failed (or ready) auto-split job using the already-staged PDF. **200** → `AutoSplitResult`. **404** missing. **409** if already `queued` or `processing`.
 
+### `GET /exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/thumb`
+Admin. A small preview of 1-based page `index` for the strip of page thumbnails: a **JPEG** rendered at 30 dpi (about
+15 KB, against about 770 KB for the full-size `/image`). Kept in server memory after the first request and cached by the
+browser for a day (`Cache-Control: private, max-age=86400`). **404** missing token or page out of range. Click-to-zoom uses
+`/image`.
+
 ### `GET /exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image`
 Admin. Returns a PNG preview (`image/png`) of 1-based page `index` from the staged auto-split PDF so the admin
 can visually verify the proposed split and roll numbers. **404** invalid token, missing session, or out-of-range page.
