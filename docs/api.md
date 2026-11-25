@@ -357,7 +357,8 @@ active TAs.
 Admin. `multipart/form-data` with `file` (one combined PDF) and optional `roll_numbers_txt` (UTF-8 `.txt`, one
 roll number per line, to constrain Claude to only those IDs). Stages the PDF and queues a background job for the
 worker (Claude) to propose paper boundaries (`first_page`, `last_page`) and extract student roll numbers
-(`student_external_id`) and names. Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`,
+(`student_external_id`) and names. Claude is shown the top of every page tiled onto a few contact-sheet images, in one
+request ([how it works](workflows.md#auto-split-of-a-combined-pdf)), so even a 150-page scan takes about half a minute. Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`,
 `error`, `allowed_roll_numbers`, `splits`, `existing_student_ids`). **404** exam. **413** file over `MAX_UPLOAD_MB`. **422** invalid PDF or empty/non-UTF-8 roll numbers file.
 
 ### `GET /exams/{exam_id}/imports/auto-split`

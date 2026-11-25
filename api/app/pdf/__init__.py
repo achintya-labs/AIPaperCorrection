@@ -214,3 +214,61 @@ def add_cover_page(
             fitz.Rect(margin, margin, r.width - margin, r.height - margin), markup, scale_low=0.4
         )
         return doc.tobytes(garbage=3, deflate=True)
+
+
+@dataclass(frozen=True)
+class Sheet:
+    png: bytes
+    pages: tuple[int, ...]  # the page numbers on this sheet, row by row
+
+
+def contact_sheets(
+    pages: list[tuple[int, bytes]],
+    top_fraction: float = 0.4,
+    cell_w: int = 740,
+    cols: int = 2,
+    max_h: int = 1500,
+) -> list[Sheet]:
+    """Tile the top part of many pages onto a few images, each cell labelled "PAGE <n>" in red.
+
+    Finding where one student's paper ends and the next begins only needs the header (roll number, name,
+    "Q1" restarting), so showing the top `top_fraction` of every page is enough, and a 158-page scan becomes
+    about 27 images instead of 158. `pages` is (page number, PNG bytes). Cells keep the page's proportions; the
+    number of rows per sheet follows from them so a sheet never exceeds `max_h` pixels (the model downsizes
+    anything much larger than ~1500 px, which would blur the handwriting).
+    """
+    if not pages:
+        return []
+    top_fraction = min(1.0, max(0.1, top_fraction))
+    gap = 4
+    with _lock:
+        strips: list[tuple[int, fitz.Pixmap]] = []
+        for no, png in pages:
+            try:
+                pm = fitz.Pixmap(png)
+                h = max(1, int(pm.height * top_fraction))
+                strips.append((no, fitz.Pixmap(pm, pm.width, h, fitz.IRect(0, 0, pm.width, h))))
+            except Exception as e:
+                raise PdfError(f"Page {no} is not a readable image: {e}") from e
+        cell_h = max(int(cell_w * s.height / s.width) for _, s in strips)
+        rows = max(1, int(max_h // (cell_h + gap)))
+        per_sheet = rows * cols
+
+        sheets: list[Sheet] = []
+        for start in range(0, len(strips), per_sheet):
+            group = strips[start : start + per_sheet]
+            used_rows = -(-len(group) // cols)
+            w, h = cols * cell_w, used_rows * (cell_h + gap)
+            with fitz.open() as doc:
+                page = doc.new_page(width=w, height=h)
+                page.draw_rect(page.rect, color=None, fill=(1, 1, 1))
+                for k, (no, strip) in enumerate(group):
+                    r, c = divmod(k, cols)
+                    x, y = c * cell_w, r * (cell_h + gap)
+                    cell = fitz.Rect(x, y, x + cell_w, y + int(cell_w * strip.height / strip.width))
+                    page.insert_image(cell, pixmap=strip)
+                    page.draw_rect(cell, color=(0.55, 0.55, 0.55), width=1)
+                    page.draw_rect(fitz.Rect(x, y, x + 92, y + 22), color=None, fill=(1, 1, 1))
+                    page.insert_text((x + 5, y + 17), f"PAGE {no}", fontsize=14, color=(0.85, 0, 0))
+                sheets.append(Sheet(page.get_pixmap(dpi=72).tobytes("png"), tuple(no for no, _ in group)))
+        return sheets

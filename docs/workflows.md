@@ -233,6 +233,33 @@ Design points:
 
 ---
 
+### Auto-split of a combined PDF
+
+`POST /exams/{id}/imports/auto-split` stages the PDF; a worker thread then runs `queue.process_split`
+(`api/app/jobs/queue.py`, `grader/claude_cli.py: propose_split`, `pdf/__init__.py: contact_sheets`).
+
+```mermaid
+flowchart TD
+    A["Worker claims a queued split job"] --> B["Render every page to a PNG<br/>100 dpi"]
+    B --> C["Contact sheets: the top SPLIT_TOP_FRACTION of each page,<br/>about 6 per image, each tile labelled PAGE n"]
+    C --> D{"More sheets than<br/>one request holds? (60)"}
+    D -- no --> E["One request: all sheets inline in one message,<br/>no tools, 2 model turns"]
+    D -- yes --> F["Overlapping chunks of 60 sheets,<br/>one request each, 1 sheet shared"]
+    E --> G["check_split_result: in range, sorted, no overlap,<br/>roll numbers in the allowed list"]
+    F --> H["Per chunk: same check, and splits must start inside the chunk"]
+    H --> I["merge_chunk_splits: the overlap is cut in the middle,<br/>pieces touching at a cut join when the roll number matches or is blank"]
+    I --> G
+    G -- valid --> J["Job ready: the admin reviews and edits the proposal"]
+    G -- invalid and attempts left --> K["Retry with the reason in the prompt"]
+    K --> E
+    G -- gives up --> L["Job failed with the message; the admin can retry"]
+```
+
+Why contact sheets in one message: the old approach told the CLI to open each page with its Read tool, one model round-trip
+per page (160 for a 158-page scan, over two minutes even in a clean test and far longer under load, and past the context
+window). Measured on a 158-page test PDF with Haiku: per-page reads 131 s and $0.25; all pages inline 32 s and $0.22;
+contact sheets 26 s and a few cents.
+
 ## 5. Review and edit conflicts
 
 Several TAs may be assigned to one paper. Each grade carries a `version`; an edit must quote the version it

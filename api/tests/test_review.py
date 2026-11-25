@@ -267,3 +267,36 @@ def test_reviewer_note_is_visible_to_the_ta_but_never_exported(env):
 
     csv_text = env.admin.get(f"/exams/{env.exam_id}/export.csv").text
     assert "Reviewer note" not in csv_text
+
+
+def _png_page(text, w=300, h=420):
+    with fitz.open() as d:
+        p = d.new_page(width=w, height=h)
+        p.insert_text((20, 40), text, fontsize=20)
+        return p.get_pixmap(dpi=72).tobytes("png")
+
+
+def test_contact_sheets_tile_the_top_of_many_pages():
+    pages = [(i, _png_page(f"ROLL {i}")) for i in range(1, 14)]
+    sheets = pdf_mod.contact_sheets(pages, top_fraction=0.4)
+    assert [s.pages for s in sheets] == [(1, 2, 3, 4, 5, 6), (7, 8, 9, 10, 11, 12), (13,)]
+    with fitz.open(stream=sheets[0].png, filetype="png") as img:
+        assert img.page_count == 1
+    pm = fitz.Pixmap(sheets[0].png)
+    assert pm.width == 2 * 740 and pm.height <= 1500  # never taller than the model reads sharply
+    # the last sheet only has one row
+    assert fitz.Pixmap(sheets[2].png).height < pm.height
+    assert pdf_mod.contact_sheets([]) == []
+
+
+def test_taller_crops_put_fewer_pages_on_a_sheet():
+    pages = [(i, _png_page("x")) for i in range(1, 9)]
+    top = pdf_mod.contact_sheets(pages, top_fraction=0.4)
+    full = pdf_mod.contact_sheets(pages, top_fraction=1.0)
+    assert max(len(s.pages) for s in full) < max(len(s.pages) for s in top)
+    assert all(fitz.Pixmap(s.png).height <= 1500 for s in full)
+
+
+def test_a_page_that_is_not_an_image_is_reported_by_number():
+    with pytest.raises(pdf_mod.PdfError, match="Page 2"):
+        pdf_mod.contact_sheets([(1, _png_page("a")), (2, b"not a png")])

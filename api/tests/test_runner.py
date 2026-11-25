@@ -13,7 +13,7 @@ from app.grader.base import GraderError, PageImage, QuestionSpec, RubricSpec
 from app.grader.claude_cli import ClaudeCliProvider, LocalExecutor, RemoteExecutor
 from app.grader.fake import FakeProvider
 from tests.test_auth import client, login  # noqa: F401  (fixture reuse)
-from tests.test_grader import FAKE_CLAUDE, PAGES, RUBRIC
+from tests.test_grader import FAKE_CLAUDE, PAGES, RUBRIC, _real_pages
 
 TOKEN = "s3cret-token"
 
@@ -70,6 +70,19 @@ def test_full_grading_through_runner(runner):
     assert args[args.index("--tools") + 1] == "Read" and "--restricted" in args
     assert call["files"] == ["page-1.png", "page-2.png", "rubric.json"]
     assert "page-1.png ... page-2.png" in call["prompt"]
+
+
+def test_split_through_the_runner_sends_the_images_inline_with_no_tools(runner):
+    runner.mode("split")
+    provider = ClaudeCliProvider(executor=runner.remote(), name="claude_runner")
+    res = provider.propose_split(_real_pages(2), "haiku")
+    assert [(s.student_external_id, s.first_page, s.last_page) for s in res.splits] == [("1001", 1, 2)]
+    (call,) = runner.calls()
+    args = call["args"]
+    assert args[args.index("--input-format") + 1] == "stream-json" and args[args.index("--output-format") + 1] == "stream-json"
+    assert args[args.index("--tools") + 1] == "" and "--allowedTools" not in args and "--restricted" in args
+    assert call["images"] == 1  # 2 pages fit on one contact sheet
+    assert call["files"] == []  # nothing was written for the CLI to open
 
 
 def test_caller_cannot_choose_cli_flags(runner):

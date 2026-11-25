@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     grader_provider: str = "claude_cli"
     claude_model: str = "claude-sonnet-5-5"
     claude_split_model: str = ""
+    # How much of each page's top the auto-split shows Claude (0.1 to 1.0). The roll number is normally near the
+    # top; raise it (up to 1) if your papers put it lower. Taller crops mean fewer pages per image.
+    split_top_fraction: float = Field(0.4, ge=0.1, le=1.0)
     grader_timeout_seconds: int = 600
     grader_max_attempts: int = 2
     claude_bin: str = "claude"

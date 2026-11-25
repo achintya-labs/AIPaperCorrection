@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.grader.base import GraderError
 from app.grader.claude_cli import ClaudeExecutor, ExecTimeout, LocalExecutor
 
-FILE_NAME = re.compile(r"^(page-\d{1,4}\.png|rubric\.json)$")
+FILE_NAME = re.compile(r"^(page-\d{1,4}\.png|sheet-\d{1,4}\.png|rubric\.json)$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9._:\-\[\]]{1,100}$")
 MAX_PROMPT_CHARS = 50_000
 MAX_FILES = 400
@@ -59,6 +59,7 @@ def create_app(
         prompt: str = Form(...),
         timeout: int = Form(600, ge=1, le=3600),
         json_schema: str | None = Form(None),
+        inline_images: bool = Form(False),
         files: list[UploadFile] = File(...),
     ):
         if not MODEL_NAME.fullmatch(model):
@@ -91,7 +92,7 @@ def create_app(
 
         with slots:
             try:
-                result = executor.run(model, prompt, contents, timeout, json_schema=parsed_schema)
+                result = executor.run(model, prompt, contents, timeout, json_schema=parsed_schema, inline_images=inline_images)
             except ExecTimeout as e:
                 return JSONResponse({"detail": str(e)}, status_code=504)
             except GraderError as e:

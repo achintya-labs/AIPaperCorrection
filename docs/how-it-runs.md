@@ -125,6 +125,7 @@ Rows marked *not wired* have a default in `api/app/config.py` but are not passed
 | `GRADER_PROVIDER` | `claude_runner` (compose) | api, worker | `claude_runner` (CLI in the `claude` container), `claude_cli` (CLI in the same process), `fake`, `anthropic_api` (stub). The code default outside compose is `claude_cli` |
 | `CLAUDE_MODEL` | `claude-sonnet-5-5` | api, worker | Model used unless the exam sets an override |
 | `CLAUDE_SPLIT_MODEL` | empty (uses `CLAUDE_MODEL`) | api | Optional model used for PDF auto-split analysis (e.g. `haiku`) |
+| `SPLIT_TOP_FRACTION` | `0.4` | api, worker | How much of each page's top the auto-split shows Claude (0.1 to 1.0). Raise it if your papers put the roll number lower; fewer pages then fit on each image |
 | `GRADER_TIMEOUT_SECONDS` | `600` | api, worker | Per attempt; also drives stale-job recovery |
 | `WORKER_CONCURRENCY` | `2` | worker, claude | Worker grading threads; also the runner's concurrent CLI limit |
 | `GRADER_MAX_ATTEMPTS` | `2` | worker | Attempts per paper for invalid model output. *not wired* |
@@ -304,6 +305,11 @@ s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.pa
 - **Reviewer notes.** Claude can add a separate **note** per question (unclear handwriting, an accepted alternative
   method, an instruction hidden in the student's work). TAs see it in a highlighted box while reviewing. It is *not*
   part of the student-facing feedback and is never exported.
+- **Auto-split of a combined PDF** shows Claude the top 40% of every page (`SPLIT_TOP_FRACTION`), six pages per image, and
+  sends all the images in one request with no tool calls: a 158-page scan is about 27 images and finishes in roughly half
+  a minute (it used to take one model round-trip per page, minutes). Very long PDFs go in overlapping chunks that are
+  merged. If roll numbers sit low on your pages, raise `SPLIT_TOP_FRACTION` (up to 1.0). If a split fails, the job shows
+  the reason and can be retried.
 - **PDF export** (one paper, or all as a ZIP): each page is widened to carry the question comments in the margin, and a
   **marks summary page** is inserted first, the same size as the pages after it: exam name, student, total marks
   obtained out of the maximum, and a breakdown per section. A section is the part of the question number before the

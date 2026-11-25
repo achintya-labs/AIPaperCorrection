@@ -15,6 +15,7 @@ PROVIDERS: dict[str, Callable[[Settings], GraderProvider]] = {
         timeout_seconds=s.grader_timeout_seconds,
         bare=s.claude_bare,
         max_attempts=s.grader_max_attempts,
+        split_top_fraction=s.split_top_fraction,
     ),
     # Same provider, but the CLI runs in the dedicated `claude` container.
     "claude_runner": lambda s: ClaudeCliProvider(
@@ -22,6 +23,7 @@ PROVIDERS: dict[str, Callable[[Settings], GraderProvider]] = {
         timeout_seconds=s.grader_timeout_seconds,
         max_attempts=s.grader_max_attempts,
         name="claude_runner",
+        split_top_fraction=s.split_top_fraction,
     ),
     "anthropic_api": lambda s: AnthropicApiProvider(max_attempts=s.grader_max_attempts),
     "fake": lambda s: FakeProvider(max_attempts=s.grader_max_attempts),

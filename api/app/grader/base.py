@@ -142,6 +142,38 @@ def check_split_result(
             fail(f"Roll number(s) not in allowed list: {unknown}")
 
 
+def merge_chunk_splits(chunks: list[tuple[int, int, list[SplitProposal]]]) -> list[SplitProposal]:
+    """Join the results of consecutive chunks of one long PDF into a single list of papers.
+
+    Each chunk is (first page, last page, its splits); consecutive chunks overlap. Every page is decided by exactly
+    one chunk: the overlap is cut in the middle, the earlier chunk deciding up to the cut and the later one after it,
+    because a chunk sees the pages near its own edges with the least context. Splits are clipped to their chunk's
+    range, and two pieces that now touch at a cut are one paper when the later one has no roll number or the same one.
+    """
+    cuts = [(chunks[i + 1][0] + chunks[i][1]) // 2 for i in range(len(chunks) - 1)]
+    pieces: list[tuple[int, SplitProposal]] = []
+    for i, (lo, hi, splits) in enumerate(chunks):
+        a = lo if i == 0 else cuts[i - 1] + 1
+        b = hi if i == len(chunks) - 1 else cuts[i]
+        for sp in splits:
+            first, last = max(sp.first_page, a), min(sp.last_page, b)
+            if first <= last:
+                pieces.append((i, sp.model_copy(update={"first_page": first, "last_page": last})))
+    pieces.sort(key=lambda t: (t[1].first_page, t[1].last_page))
+    out: list[tuple[int, SplitProposal]] = []
+    for i, sp in pieces:
+        if out:
+            pi, prev = out[-1]
+            touching = sp.first_page == prev.last_page + 1
+            if i != pi and touching and (not sp.student_external_id or sp.student_external_id == prev.student_external_id):
+                prev.last_page = sp.last_page
+                prev.student_name = prev.student_name or sp.student_name
+                prev.confidence = min(prev.confidence, sp.confidence)
+                continue
+        out.append((i, sp))
+    return [sp for _, sp in out]
+
+
 class GraderProvider(ABC):
     """
     Pluggable grading backend. Implement `_attempt` only; `grade` adds validation and retries,
