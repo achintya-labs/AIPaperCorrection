@@ -392,3 +392,33 @@ def test_inline_command_has_no_tools_and_the_message_carries_the_images():
     out = '{"type":"system"}\n{"type":"assistant"}\n{"type":"result","is_error":false}\n'
     assert json.loads(extract_result_event(out))["type"] == "result"
     assert extract_result_event("plain text") == "plain text"
+
+
+def test_apply_roster_makes_roster_names_authoritative_and_resolves_missing_rolls():
+    from app.grader.base import SplitProposal, SplitResult, apply_roster
+
+    def sp(i, name, a, b):
+        return SplitProposal(student_external_id=i, student_name=name, first_page=a, last_page=b, confidence=0.9)
+
+    names = {"1001": "Ann Lee", "1002": "Bo Chen", "1003": "Bo Chen"}
+    r = SplitResult(splits=[sp("1001", "Ann Le", 1, 2), sp("", "ann  LEE", 3, 4), sp("", "Bo Chen", 5, 6), sp("", "Zed", 7, 8)])
+    apply_roster(r, names)
+    assert [(s.student_external_id, s.student_name) for s in r.splits] == [
+        ("1001", "Ann Lee"),   # misread name corrected from the roster
+        ("1001", "Ann Lee"),   # unreadable roll number found from the name
+        ("", "Bo Chen"),       # two roster entries share the name: don't guess
+        ("", "Zed"),
+    ]
+    apply_roster(r, {})  # no roster: nothing changes
+
+
+def test_roster_names_go_into_the_prompt():
+    ex = RecordingExec([[("1001", 1, 2)]])
+    ClaudeCliProvider(executor=ex).propose_split(
+        _real_pages(2), "haiku", allowed_roll_numbers=["1001", "1002"], roll_names={"1001": "Ann Lee"}
+    )
+    prompt = ex.calls[0]["prompt"]
+    assert '"1001": "Ann Lee"' in prompt and '"1002": ""' in prompt and "second clue" in prompt
+    plain = RecordingExec([[("1001", 1, 2)]])
+    ClaudeCliProvider(executor=plain).propose_split(_real_pages(2), "haiku", allowed_roll_numbers=["1001"])
+    assert "Allowed roll numbers" in plain.calls[0]["prompt"] and "second clue" not in plain.calls[0]["prompt"]

@@ -354,12 +354,30 @@ otherwise `uploaded`.
 active TAs.
 
 ### `POST /exams/{exam_id}/imports/auto-split`
-Admin. `multipart/form-data` with `file` (one combined PDF) and optional `roll_numbers_txt` (UTF-8 `.txt`, one
-roll number per line, to constrain Claude to only those IDs). Stages the PDF and queues a background job for the
-worker (Claude) to propose paper boundaries (`first_page`, `last_page`) and extract student roll numbers
-(`student_external_id`) and names. Claude is shown the top of every page tiled onto a few contact-sheet images, in one
-request ([how it works](workflows.md#auto-split-of-a-combined-pdf)), so even a 150-page scan takes about half a minute. Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`,
-`error`, `allowed_roll_numbers`, `splits`, `existing_student_ids`). **404** exam. **413** file over `MAX_UPLOAD_MB`. **422** invalid PDF or empty/non-UTF-8 roll numbers file.
+Admin. `multipart/form-data` with `file` (one combined PDF) and an optional **roster** `roll_numbers_csv` that limits
+Claude to the roll numbers on it. Stages the PDF and queues a background job for the worker (Claude) to propose paper
+boundaries (`first_page`, `last_page`) and extract student roll numbers (`student_external_id`) and names. Claude is shown
+the top of every page tiled onto a few contact-sheet images, in one request
+([how it works](workflows.md#auto-split-of-a-combined-pdf)), so even a 150-page scan takes about half a minute.
+
+**Roster CSV format** (UTF-8, comma-separated; Excel's "CSV UTF-8" is fine):
+
+| Layout | Example |
+|---|---|
+| one column: roll numbers | `2024CS01` ⏎ `2024CS02` |
+| two columns: roll number, name | `2024CS01,Ann Lee` ⏎ `2024CS02,Bo Chen` |
+
+A header row is optional: `roll_number` (also `roll`, `roll_no`, `student_id`, `id`, `registration_number`, `reg_no`), then `name`
+(also `student_name`, `full_name`). Blank lines are skipped, values are trimmed, a name may be left empty for some rows, and
+quoted values may contain commas. The roster's names help Claude match a paper and are **authoritative afterwards**: a split
+whose roll number is on the roster gets the roster's name, and a split with no readable roll number whose name matches exactly
+one roster name gets that name's roll number.
+
+Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`, `error`, `allowed_roll_numbers`, `roll_names`
+(roll number → name, only for rows that had one), `splits`, `existing_student_ids`). **404** exam. **413** file over
+`MAX_UPLOAD_MB`. **422** invalid PDF, or a roster that fails the format check; the message names the line, for example
+`Roster CSV: line 3: roll number '2024CS01' appears twice (first on line 1)`. Checked: empty file, not UTF-8, more than two columns,
+an empty roll number, a duplicate roll number, a second-column header that is not a name column, and `;` or tab separators.
 
 ### `GET /exams/{exam_id}/imports/auto-split`
 Admin. Lists staged/background auto-split jobs for the exam (`AutoSplitResult[]`, newest first), so the UI can

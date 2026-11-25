@@ -47,7 +47,11 @@ class FakeProvider(GraderProvider):
         return GradingOutcome(result=result, raw_output="fake", model=model or "fake")
 
     def propose_split(
-        self, pages: list[PageImage], model: str, allowed_roll_numbers: list[str] | None = None
+        self,
+        pages: list[PageImage],
+        model: str,
+        allowed_roll_numbers: list[str] | None = None,
+        roll_names: dict[str, str] | None = None,
     ) -> SplitResult:
         if not pages:
             return SplitResult(splits=[])

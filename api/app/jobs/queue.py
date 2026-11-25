@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app import pdf
 from app.config import Settings
 from app.db import is_sqlite
-from app.grader.base import GraderProvider, PageImage, QuestionSpec, RubricSpec
+from app.grader.base import GraderProvider, PageImage, QuestionSpec, RubricSpec, apply_roster
 from app.models import (
     Exam,
     Grade,
@@ -238,6 +238,7 @@ def process_split(db: Session, job: SplitJob, provider: GraderProvider, storage:
     """Render pages and run Claude auto-split for one claimed SplitJob. Never raises."""
     job_id, exam_id, pdf_path = job.id, job.exam_id, job.pdf_path
     allowed_rolls = list(job.allowed_roll_numbers or [])
+    roll_names = {k: v for k, v in dict(job.roll_names or {}).items() if v}
     exam = db.get(Exam, exam_id)
     model = settings.claude_split_model or (exam.model_override if exam else None) or settings.claude_model
     try:
@@ -247,7 +248,9 @@ def process_split(db: Session, job: SplitJob, provider: GraderProvider, storage:
             for i, png in enumerate(pdf.render_pages(pdf_bytes, dpi=100), start=1)
         ]
         db.rollback()
-        result = provider.propose_split(images, model, allowed_roll_numbers=allowed_rolls or None)
+        extra = {"roll_names": roll_names} if roll_names else {}
+        result = provider.propose_split(images, model, allowed_roll_numbers=allowed_rolls or None, **extra)
+        apply_roster(result, roll_names)
         fresh = db.get(SplitJob, job_id)
         if fresh is None:
             return

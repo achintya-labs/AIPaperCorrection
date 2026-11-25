@@ -281,35 +281,80 @@ def test_auto_split_retry_after_failure(client, storage):
     assert client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()["status"] == "ready"
 
 
-def test_auto_split_with_allowed_roll_numbers_txt(client, storage):
+def _auto_split(client, exam_id, csv_bytes, name="roster.csv"):
+    return client.post(
+        f"/exams/{exam_id}/imports/auto-split",
+        files={
+            "file": ("combined.pdf", make_pdf(4), "application/pdf"),
+            "roll_numbers_csv": (name, csv_bytes, "text/csv"),
+        },
+    )
+
+
+def test_auto_split_with_a_roll_number_roster(client, storage):
     from app.config import Settings
     from app.grader.fake import FakeProvider
     from app.jobs import worker
     from tests.test_auth import TestSession
 
     exam_id = make_exam(client)
-    # Empty txt -> 422
-    bad = client.post(
-        f"/exams/{exam_id}/imports/auto-split",
-        files={
-            "file": ("combined.pdf", make_pdf(4), "application/pdf"),
-            "roll_numbers_txt": ("rolls.txt", b"\n  \n", "text/plain"),
-        },
-    )
-    assert bad.status_code == 422
-
-    r = client.post(
-        f"/exams/{exam_id}/imports/auto-split",
-        files={
-            "file": ("combined.pdf", make_pdf(4), "application/pdf"),
-            "roll_numbers_txt": ("rolls.txt", b"2024CS01\n2024CS02\n2024CS01\n", "text/plain"),
-        },
-    )
+    # one column, no header, with a blank line and padding spaces
+    r = _auto_split(client, exam_id, b"2024CS01\n\n 2024CS02 \n")
     assert r.status_code == 200
     body = r.json()
-    assert body["allowed_roll_numbers"] == ["2024CS01", "2024CS02"]
+    assert body["allowed_roll_numbers"] == ["2024CS01", "2024CS02"] and body["roll_names"] == {}
     token = body["split_token"]
 
     assert worker.run_once(FakeProvider(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
     polled = client.get(f"/exams/{exam_id}/imports/auto-split/{token}").json()
     assert [s["student_external_id"] for s in polled["splits"]] == ["2024CS01", "2024CS02"]
+
+
+def test_auto_split_roster_with_names_fills_the_names(client, storage):
+    from app.config import Settings
+    from app.grader.fake import FakeProvider
+    from app.jobs import worker
+    from tests.test_auth import TestSession
+
+    exam_id = make_exam(client)
+    # BOM + header + two columns, one person without a name
+    csv_bytes = "\ufeffRoll Number,Name\n2024CS01,Ann Lee\n2024CS02,\n".encode("utf-8")
+    body = _auto_split(client, exam_id, csv_bytes).json()
+    assert body["allowed_roll_numbers"] == ["2024CS01", "2024CS02"] and body["roll_names"] == {"2024CS01": "Ann Lee"}
+
+    assert worker.run_once(FakeProvider(), storage, Settings(grader_provider="fake"), session_factory=TestSession)
+    polled = client.get(f"/exams/{exam_id}/imports/auto-split/{body['split_token']}").json()
+    assert [(s["student_external_id"], s["student_name"]) for s in polled["splits"]] == [("2024CS01", "Ann Lee"), ("2024CS02", "")]
+
+
+@pytest.mark.parametrize(
+    "content, message",
+    [
+        (b"", "the file is empty"),
+        (b"\n  \n,\n", "the file is empty"),
+        (b"\xff\xfe\x00bad", "UTF-8"),
+        (b"roll_number,name\n", "header but no roll numbers"),
+        (b"a,b,c\n1,2,3\n", "line 1 has 3 columns"),
+        (b"2024CS01,Ann\n2024CS02,Bo,extra\n", "line 2 has 3 columns"),
+        (b"2024CS01\n2024CS02\n2024CS01\n", "line 3: roll number '2024CS01' appears twice (first on line 1)"),
+        (b"roll_number,name\n,Ann Lee\n", "line 2: the roll number is empty"),
+        (b"roll_number,marks\n1001,40\n", "second column is called 'marks'"),
+        (b"2024CS01;Ann Lee\n2024CS02;Bo Chen\n", "uses ';' or tabs"),
+        (b"2024CS01\tAnn\n", "uses ';' or tabs"),
+    ],
+)
+def test_roster_csv_format_errors_are_specific(client, content, message):
+    exam_id = make_exam(client)
+    r = _auto_split(client, exam_id, content)
+    assert r.status_code == 422 and message in r.json()["detail"], r.text
+    assert client.get(f"/exams/{exam_id}/imports/auto-split").json() == []  # nothing was staged
+
+
+def test_roster_header_is_optional_and_flexible():
+    from app.routes.imports import _parse_roster_csv
+
+    assert _parse_roster_csv(b"1001\n1002\n") == (["1001", "1002"], {})
+    assert _parse_roster_csv(b"Student ID\n1001\n") == (["1001"], {})
+    assert _parse_roster_csv(b"student_id,Student Name\n1001,Ann Lee\n1002,\n") == (["1001", "1002"], {"1001": "Ann Lee"})
+    assert _parse_roster_csv(b'1001,"Lee, Ann"\n') == (["1001"], {"1001": "Lee, Ann"})  # quoted comma
+    assert _parse_roster_csv(b"1001\n1002,Bo\n") == (["1001", "1002"], {"1002": "Bo"})  # a short row is fine

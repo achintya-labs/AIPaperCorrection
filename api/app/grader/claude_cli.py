@@ -439,7 +439,11 @@ class ClaudeCliProvider(GraderProvider):
         return GradingOutcome(result=result, raw_output=proc.stdout, model=model, usage=usage)
 
     def propose_split(
-        self, pages: list[PageImage], model: str, allowed_roll_numbers: list[str] | None = None
+        self,
+        pages: list[PageImage],
+        model: str,
+        allowed_roll_numbers: list[str] | None = None,
+        roll_names: dict[str, str] | None = None,
     ) -> SplitResult:
         """Find the papers in a combined scan from a few contact sheets instead of every page.
 
@@ -465,7 +469,7 @@ class ClaudeCliProvider(GraderProvider):
         parts = []
         for ci, chunk in enumerate(chunks):
             lo, hi = min(min(sh.pages) for sh in chunk), max(max(sh.pages) for sh in chunk)
-            result = self._split_chunk(chunk, ci, len(chunks), lo, hi, total, model, allowed_roll_numbers)
+            result = self._split_chunk(chunk, ci, len(chunks), lo, hi, total, model, allowed_roll_numbers, roll_names)
             parts.append((lo, hi, result.splits))
         merged = SplitResult(splits=merge_chunk_splits(parts)) if len(parts) > 1 else SplitResult(splits=parts[0][2])
         try:
@@ -477,11 +481,21 @@ class ClaudeCliProvider(GraderProvider):
     def _split_chunk(
         self, sheets, index: int, count: int, lo: int, hi: int, total: int, model: str,
         allowed_roll_numbers: list[str] | None,
+        roll_names: dict[str, str] | None = None,
     ) -> SplitResult:
         files = {f"sheet-{i}.png": sh.png for i, sh in enumerate(sheets, start=1)}
         schema = SplitResult.model_json_schema()
         allowed_note = ""
-        if allowed_roll_numbers:
+        if allowed_roll_numbers and roll_names:
+            roster = {r: roll_names.get(r, "") for r in allowed_roll_numbers}
+            allowed_note = (
+                "\n\nRoster, as roll number: name (ONLY these roll numbers may appear in this PDF; an empty name means unknown): "
+                + json.dumps(roster, ensure_ascii=False)
+                + '\nMatch each paper to the exact roll number from this roster. The name written on a paper is a second clue: '
+                "use it to confirm or to find the roll number when the number is hard to read. "
+                'Do NOT invent any ID outside the roster; use "" if you cannot tell.'
+            )
+        elif allowed_roll_numbers:
             allowed_note = (
                 "\n\nAllowed roll numbers (ONLY these roll numbers may appear in this PDF): "
                 + json.dumps(allowed_roll_numbers)

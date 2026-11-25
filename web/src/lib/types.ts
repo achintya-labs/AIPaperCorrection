@@ -81,6 +81,7 @@ export interface AutoSplitResult {
   status: SplitJobStatus;
   error: string | null;
   allowed_roll_numbers: string[];
+  roll_names: Record<string, string>;
   splits: ProposedSplit[];
   existing_student_ids: string[];
 }

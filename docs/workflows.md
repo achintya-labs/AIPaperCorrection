@@ -240,7 +240,7 @@ Design points:
 
 ```mermaid
 flowchart TD
-    A["Worker claims a queued split job"] --> B["Render every page to a PNG<br/>100 dpi"]
+    A["Worker claims a queued split job<br/>(roster CSV already checked and stored with it)"] --> B["Render every page to a PNG<br/>100 dpi"]
     B --> C["Contact sheets: the top SPLIT_TOP_FRACTION of each page,<br/>about 6 per image, each tile labelled PAGE n"]
     C --> D{"More sheets than<br/>one request holds? (60)"}
     D -- no --> E["One request: all sheets inline in one message,<br/>no tools, 2 model turns"]
@@ -249,7 +249,8 @@ flowchart TD
     F --> H["Per chunk: same check, and splits must start inside the chunk"]
     H --> I["merge_chunk_splits: the overlap is cut in the middle,<br/>pieces touching at a cut join when the roll number matches or is blank"]
     I --> G
-    G -- valid --> J["Job ready: the admin reviews and edits the proposal"]
+    G -- valid --> R["apply_roster: roster names win;<br/>blank roll number + unique matching name gets the roll number"]
+    R --> J["Job ready: the admin reviews and edits the proposal"]
     G -- invalid and attempts left --> K["Retry with the reason in the prompt"]
     K --> E
     G -- gives up --> L["Job failed with the message; the admin can retry"]

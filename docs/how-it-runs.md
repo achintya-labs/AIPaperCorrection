@@ -305,6 +305,11 @@ s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.pa
 - **Reviewer notes.** Claude can add a separate **note** per question (unclear handwriting, an accepted alternative
   method, an instruction hidden in the student's work). TAs see it in a highlighted box while reviewing. It is *not*
   part of the student-facing feedback and is never exported.
+- **Roster for auto-split (optional CSV):** one column of roll numbers, or two columns, roll number and name, with an
+  optional header (`roll_number,name`). Claude may only use roll numbers on it, and the names help it match handwriting. After
+  Claude answers, the roster's names win and a paper with an unreadable roll number but a readable name that matches one roster
+  name gets that roll number. The upload is checked first, and a mistake (duplicate roll number, a third column, `;` separators,
+  not UTF-8, ...) is reported with its line number. The import page offers a template; `samples/roster.csv` is an example.
 - **Auto-split of a combined PDF** shows Claude the top 40% of every page (`SPLIT_TOP_FRACTION`), six pages per image, and
   sends all the images in one request with no tool calls: a 158-page scan is about 27 images and finishes in roughly half
   a minute (it used to take one model round-trip per page, minutes). Very long PDFs go in overlapping chunks that are

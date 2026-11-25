@@ -205,6 +205,8 @@ class SplitJob(Base):
         Enum(SplitJobStatus), default=SplitJobStatus.queued, index=True
     )
     allowed_roll_numbers: Mapped[list] = mapped_column(JSON, default=list)
+    # roll number -> name, from the optional two-column roster CSV (empty when only roll numbers were given)
+    roll_names: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
     splits: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

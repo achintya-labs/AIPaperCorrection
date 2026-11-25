@@ -252,7 +252,9 @@ def main():
         w = csv.writer(f); w.writerow(["student_id", "name", "first_page", "last_page"]); w.writerows(rows_combined)
     with open(OUT / "files-mapping.csv", "w", newline="") as f:
         w = csv.writer(f); w.writerow(["student_id", "name"]); w.writerows(rows_files)
-    (OUT / "roll-numbers.txt").write_text("\n".join(s[0] for s in STUDENTS) + "\n")
+    (OUT / "roll-numbers.csv").write_text("\n".join(s[0] for s in STUDENTS) + "\n")  # one column, no header
+    with open(OUT / "roster.csv", "w", newline="") as f:  # roll number + name, with a header
+        w = csv.writer(f); w.writerow(["roll_number", "name"]); w.writerows([[s[0], s[1]] for s in STUDENTS])
 
     lines = [
         f"# Sample data: {EXAM}", "",
@@ -262,7 +264,8 @@ def main():
         "| `rubric.json` | Exam -> Rubric tab -> Import JSON -> Save |",
         "| `answers/<roll>.pdf` | Import -> *One PDF per student* (optionally with `files-mapping.csv`) |",
         "| `combined-answers.pdf` + `combined-mapping.csv` | Import -> *One combined PDF, page ranges in the CSV* |",
-        "| `combined-answers.pdf` + `roll-numbers.txt` | Import -> *Combined PDF, auto-split* (txt is the allowed roll numbers) |", "",
+        "| `combined-answers.pdf` + `roster.csv` | Import -> *Combined PDF, auto-split*; the roster CSV is optional: roll number + name, with a header |",
+        "| `combined-answers.pdf` + `roll-numbers.csv` | the same, with a roster of just roll numbers (one column, no header) |", "",
         "## What each student's sheet is designed to test", "",
     ]
     notes = {

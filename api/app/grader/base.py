@@ -142,6 +142,30 @@ def check_split_result(
             fail(f"Roll number(s) not in allowed list: {unknown}")
 
 
+def _norm_name(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+def apply_roster(result: SplitResult, names: dict[str, str]) -> None:
+    """Make the roster's names authoritative. A split whose roll number is on the roster gets the roster's name (Claude
+    may have misread the handwriting). A split with no roll number but a readable name that matches exactly one roster
+    name gets that name's roll number."""
+    if not names:
+        return
+    by_name: dict[str, list[str]] = {}
+    for roll, name in names.items():
+        if _norm_name(name):
+            by_name.setdefault(_norm_name(name), []).append(roll)
+    for sp in result.splits:
+        if sp.student_external_id in names:
+            if names[sp.student_external_id]:
+                sp.student_name = names[sp.student_external_id]
+        elif not sp.student_external_id and sp.student_name:
+            rolls = by_name.get(_norm_name(sp.student_name), [])
+            if len(rolls) == 1:
+                sp.student_external_id, sp.student_name = rolls[0], names[rolls[0]]
+
+
 def merge_chunk_splits(chunks: list[tuple[int, int, list[SplitProposal]]]) -> list[SplitProposal]:
     """Join the results of consecutive chunks of one long PDF into a single list of papers.
 
@@ -215,9 +239,15 @@ class GraderProvider(ABC):
         raise GraderError(f"Gave up after {self.max_attempts} attempts: {last}")
 
     def propose_split(
-        self, pages: list[PageImage], model: str, allowed_roll_numbers: list[str] | None = None
+        self,
+        pages: list[PageImage],
+        model: str,
+        allowed_roll_numbers: list[str] | None = None,
+        roll_names: dict[str, str] | None = None,
     ) -> SplitResult:
-        """Propose how a combined PDF's pages split into individual student papers."""
+        """Propose how a combined PDF's pages split into individual student papers.
+
+        `roll_names` (roll number -> name, optional) is the roster's names, a second clue for matching a paper."""
         raise GraderError(f"Auto-split is not supported by provider {self.name!r}")
 
 

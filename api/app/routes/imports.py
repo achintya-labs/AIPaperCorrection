@@ -249,6 +249,7 @@ class AutoSplitResult(BaseModel):
     status: SplitJobStatus
     error: str | None = None
     allowed_roll_numbers: list[str] = []
+    roll_names: dict[str, str] = {}  # roll number -> name, when the roster CSV had a name column
     splits: list[ProposedSplit]
     existing_student_ids: list[str]
 
@@ -295,35 +296,86 @@ def _split_out(job: SplitJob, existing: list[str]) -> AutoSplitResult:
         status=job.status,
         error=job.error,
         allowed_roll_numbers=list(job.allowed_roll_numbers or []),
+        roll_names=dict(job.roll_names or {}),
         splits=[ProposedSplit(**sp) for sp in (job.splits or [])],
         existing_student_ids=existing,
     )
 
 
-def _parse_roll_numbers_txt(raw: bytes) -> list[str]:
+def _header_key(cell: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", cell.lower()).strip("_")
+
+
+_ROLL_HEADERS = {"roll_number", "roll_numbers", "roll", "rollno", "roll_no", "student_id", "studentid", "id",
+                 "registration_number", "reg_no"}
+_NAME_HEADERS = {"name", "student_name", "full_name"}
+
+
+def _parse_roster_csv(raw: bytes) -> tuple[list[str], dict[str, str]]:
+    """The optional roster for auto-split: UTF-8 CSV with either one column (roll numbers) or two (roll number, name).
+
+    A header row is optional (`roll_number` or `student_id`, then `name`). Blank lines are skipped. Anything unclear is a
+    422 that names the line, so a typo is caught before Claude spends minutes on it. Returns (roll numbers in file order,
+    {roll number: name} for those that have a name).
+    """
+
+    def bad(msg: str):
+        raise HTTPException(422, f"Roster CSV: {msg}")
+
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise HTTPException(422, "Roll numbers file must be UTF-8 text")
-    rolls = list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
-    if not rolls:
-        raise HTTPException(422, "Roll numbers file is empty")
-    return rolls
+        bad("the file must be UTF-8 text (in Excel: Save As, CSV UTF-8)")
+    try:
+        parsed = [(n, [c.strip() for c in row]) for n, row in enumerate(csv.reader(io.StringIO(text)), start=1)]
+    except csv.Error as e:
+        bad(f"not valid CSV ({e})")
+    rows = [(n, r) for n, r in parsed if any(r)]
+    if not rows:
+        bad("the file is empty")
+    for n, r in rows:
+        if any(";" in c or "\t" in c for c in r):
+            bad(f"line {n} looks like it uses ';' or tabs as separators; use commas")
+        if len(r) > 2:
+            bad(f"line {n} has {len(r)} columns; use one (roll number) or two (roll number, name)")
+
+    if _header_key(rows[0][1][0]) in _ROLL_HEADERS:
+        n, header = rows.pop(0)
+        if len(header) == 2 and header[1] and _header_key(header[1]) not in _NAME_HEADERS:
+            bad(f"line {n}: the second column is called {header[1]!r}; name it 'name' (or leave the header off)")
+        if not rows:
+            bad("it has a header but no roll numbers")
+
+    rolls: list[str] = []
+    names: dict[str, str] = {}
+    first_line: dict[str, int] = {}
+    for n, r in rows:
+        roll = r[0]
+        if not roll:
+            bad(f"line {n}: the roll number is empty")
+        if roll in first_line:
+            bad(f"line {n}: roll number {roll!r} appears twice (first on line {first_line[roll]})")
+        first_line[roll] = n
+        rolls.append(roll)
+        if len(r) == 2 and r[1]:
+            names[roll] = r[1]
+    return rolls, names
 
 
 @router.post("/exams/{exam_id}/imports/auto-split", response_model=AutoSplitResult)
 async def auto_split_import(
     exam_id: int,
     file: UploadFile = File(...),
-    roll_numbers_txt: UploadFile | None = File(None),
+    roll_numbers_csv: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ):
-    """Upload one combined PDF and queue a background job for Claude to propose splits & roll numbers."""
+    """Upload one combined PDF (and optionally a roster CSV) and queue a background job for Claude to propose splits
+    & roll numbers."""
     if not db.get(Exam, exam_id):
         raise HTTPException(404, "Exam not found")
 
-    allowed_rolls = _parse_roll_numbers_txt(await _read_upload(roll_numbers_txt)) if roll_numbers_txt else []
+    allowed_rolls, roll_names = _parse_roster_csv(await _read_upload(roll_numbers_csv)) if roll_numbers_csv else ([], {})
     data = await _read_upload(file)
     try:
         total_pages = await run_in_threadpool(pdf.page_count, data)
@@ -341,6 +393,7 @@ async def auto_split_import(
         page_count=total_pages,
         status=SplitJobStatus.queued,
         allowed_roll_numbers=allowed_rolls,
+        roll_names=roll_names,
     )
     db.add(job)
     db.commit()

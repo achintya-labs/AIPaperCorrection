@@ -10,6 +10,7 @@ const makeJob = (status: AutoSplitResult["status"]): AutoSplitResult => ({
   status,
   error: status === "failed" ? "boom" : null,
   allowed_roll_numbers: [],
+  roll_names: {},
   splits: [],
   existing_student_ids: [],
 });

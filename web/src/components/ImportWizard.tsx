@@ -19,7 +19,8 @@ interface EditableSplit {
   ta_ids: number[];
 }
 
-const TEMPLATES: Record<"files" | "combined", string> = {
+const TEMPLATES: Record<Layout, string> = {
+  auto: "roll_number,name\n2024CS01,Ann Lee\n2024CS02,Bo Chen\n",
   files: "student_id,name,ta_emails\n1001,Ann Lee,ta1@school.edu;ta2@school.edu\n1002,Bo Chen,ta1@school.edu\n",
   combined: "student_id,name,first_page,last_page,ta_emails\n1001,Ann Lee,2,5,ta1@school.edu\n1002,Bo Chen,6,9,ta2@school.edu\n",
 };
@@ -29,7 +30,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
   const [layout, setLayout] = useState<Layout>("files");
   const [pdfs, setPdfs] = useState<File[]>([]);
   const [csv, setCsv] = useState<File | null>(null);
-  const [rollTxt, setRollTxt] = useState<File | null>(null);
+  const [rosterCsv, setRosterCsv] = useState<File | null>(null);
   const [assign, setAssign] = useState<Assign>("");
   const [reviewers, setReviewers] = useState(1);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -104,7 +105,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
     if (next === layout) return;
     setLayout(next); setResult(null); setError("");
     // Files picked for one layout are wrong for another (multi vs single PDF): start clean.
-    setPdfs([]); setCsv(null); setRollTxt(null); setInputKey((k) => k + 1);
+    setPdfs([]); setCsv(null); setRosterCsv(null); setInputKey((k) => k + 1);
   }
 
   const ready =
@@ -130,7 +131,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
     const stale = autoResult && autoResult.status === "failed" ? autoResult : null;
     const fd = new FormData();
     fd.append("file", pdfs[0]);
-    if (rollTxt) fd.append("roll_numbers_txt", rollTxt);
+    if (rosterCsv) fd.append("roll_numbers_csv", rosterCsv);
     try {
       const res = await api<AutoSplitResult>(`/exams/${examId}/imports/auto-split`, { method: "POST", body: fd });
       if (stale) {
@@ -181,7 +182,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
       });
       setResult(res);
       setAutoResult(null); setSplits([]); setZoomPage(null);
-      setPdfs([]); setRollTxt(null); setInputKey((k) => k + 1);
+      setPdfs([]); setRosterCsv(null); setInputKey((k) => k + 1);
     } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
@@ -198,10 +199,9 @@ export default function ImportWizard({ examId }: { examId: number }) {
   }
 
   function downloadTemplate() {
-    if (layout === "auto") return;
     const url = URL.createObjectURL(new Blob([TEMPLATES[layout]], { type: "text/csv" }));
     const a = document.createElement("a");
-    a.href = url; a.download = `import-${layout}.csv`; a.click();
+    a.href = url; a.download = layout === "auto" ? "roster.csv" : `import-${layout}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -212,7 +212,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
     setSplits([]);
     setPdfs([]);
     setCsv(null);
-    setRollTxt(null);
+    setRosterCsv(null);
     setZoomPage(null);
     setInputKey((k) => k + 1);
   };
@@ -295,10 +295,14 @@ export default function ImportWizard({ examId }: { examId: number }) {
                   </div>
                 ) : (
                   <div className="field">
-                    <label htmlFor="roll-txt">Allowed roll numbers (.txt, optional)</label>
-                    <input key={`roll-${inputKey}`} id="roll-txt" type="file" accept=".txt,text/plain" disabled={splitLocked}
-                      onChange={(e) => setRollTxt(e.target.files?.[0] ?? null)} />
-                    <span className="hint">One roll number per line; constrains Claude to this list.</span>
+                    <label htmlFor="roster-csv">Student roster (.csv, optional)</label>
+                    <input key={`roll-${inputKey}`} id="roster-csv" type="file" accept=".csv,text/csv" disabled={splitLocked}
+                      onChange={(e) => setRosterCsv(e.target.files?.[0] ?? null)} />
+                    <span className="hint">
+                      One column of roll numbers, or two: roll number and name. A header row is optional. Claude may only use
+                      these roll numbers, and the names help it match papers.{" "}
+                      <button type="button" className="link small" onClick={downloadTemplate}>Download a template</button>
+                    </span>
                   </div>
                 )}
               </div>
@@ -408,7 +412,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
 
               {autoResult.allowed_roll_numbers.length > 0 && (
                 <datalist id="allowed-rolls">
-                  {autoResult.allowed_roll_numbers.map((r) => <option key={r} value={r} />)}
+                  {autoResult.allowed_roll_numbers.map((r) => <option key={r} value={r} label={autoResult.roll_names[r] || undefined} />)}
                 </datalist>
               )}
 
@@ -432,7 +436,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
                         <span className="hint">Pages {sp.first_page}–{sp.last_page}</span>
                         {sp.confidence !== null && <ConfidenceBadge value={sp.confidence} label="split" />}
                         {alreadyExists && <span className="badge warn">already imported (will skip)</span>}
-                        {notInAllowed && <span className="badge warn">not in .txt list</span>}
+                        {notInAllowed && <span className="badge warn">not in the roster</span>}
                       </div>
                       <button className="danger" onClick={() => setSplits((all) => all.filter((_, k) => k !== idx))}
                         disabled={splits.length <= 1}>Remove</button>
@@ -443,7 +447,14 @@ export default function ImportWizard({ examId }: { examId: number }) {
                         <label htmlFor={`roll-${idx}`}>Roll number / Student ID</label>
                         <input id={`roll-${idx}`} type="text" list={autoResult.allowed_roll_numbers.length > 0 ? "allowed-rolls" : undefined}
                           value={sp.student_external_id} placeholder="e.g. 2024CS01"
-                          onChange={(e) => update({ student_external_id: e.target.value })} />
+                          onChange={(e) => {
+                            const roll = e.target.value;
+                            const fromRoster = autoResult.roll_names[roll.trim()];
+                            const previous = autoResult.roll_names[sp.student_external_id.trim()];
+                            // Fill the name from the roster, but never overwrite one the TA typed.
+                            const fill = fromRoster && (!sp.student_name || sp.student_name === previous);
+                            update(fill ? { student_external_id: roll, student_name: fromRoster } : { student_external_id: roll });
+                          }} />
                       </div>
                       <div className="field">
                         <label htmlFor={`name-${idx}`}>Name (optional)</label>
