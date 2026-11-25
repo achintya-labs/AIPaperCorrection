@@ -211,3 +211,16 @@ def test_grader_status_endpoint(client, monkeypatch):
     client.post("/auth/logout")
     login(client, "ta@x.io")
     assert client.get("/grader/status").status_code == 403
+
+
+def test_the_runner_imports_without_pymupdf():
+    """The `claude` container installs only the runner's few dependencies, not PyMuPDF (the worker builds the
+    contact sheets). A top-level `import fitz` anywhere the runner imports crashed that container at start-up."""
+    import subprocess
+    from pathlib import Path
+
+    api_dir = Path(__file__).resolve().parent.parent
+    code = "import sys; sys.modules['fitz'] = None; import app.claude_runner, app.grader.claude_cli, app.grader.base"
+    r = subprocess.run([sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {str(api_dir)!r}); {code}"],
+                       capture_output=True, text=True, env={"CLAUDE_RUNNER_TOKEN": "t"})
+    assert r.returncode == 0, r.stderr

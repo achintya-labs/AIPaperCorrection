@@ -15,7 +15,6 @@ log = logging.getLogger("grader.claude_cli")
 import httpx
 from pydantic import ValidationError
 
-from app import pdf
 from app.grader.base import (
     GraderError,
     GraderProvider,
@@ -448,6 +447,10 @@ class ClaudeCliProvider(GraderProvider):
         158-page PDF is about 27 images and 2 model turns instead of 160. A PDF too long for one request is cut into
         overlapping chunks whose answers are merged (merge_chunk_splits).
         """
+        # Imported here, not at the top: the dedicated `claude` container imports this module for its runner but has no
+        # PyMuPDF installed (only the worker, which builds the sheets, does).
+        from app import pdf
+
         if not pages:
             raise GraderError("PDF has no pages")
         total = max(p.index for p in pages)
