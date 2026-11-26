@@ -809,6 +809,11 @@
           "google": {
             "title": "Google",
             "type": "boolean"
+          },
+          "mode": {
+            "default": "local",
+            "title": "Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -1842,6 +1847,7 @@
     },
     "/auth/users": {
       "get": {
+        "description": "Local mode: the users table. SSO mode: the LDAP directory (enrolled users); the cache is synced first so every\nlisted person has an id (for TA assignment) and people who left the groups drop out.",
         "operationId": "list_users_auth_users_get",
         "parameters": [
           {

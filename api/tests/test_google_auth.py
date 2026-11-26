@@ -124,8 +124,8 @@ def test_user_cancelled(client):
 
 
 def test_providers_and_unconfigured(client, monkeypatch):
-    assert client.get("/auth/providers").json() == {"google": True}
+    assert client.get("/auth/providers").json() == {"google": True, "mode": "local"}
     monkeypatch.setattr(get_settings(), "google_client_secret", "")
-    assert client.get("/auth/providers").json() == {"google": False}
+    assert client.get("/auth/providers").json() == {"google": False, "mode": "local"}
     assert client.get("/auth/google/login", follow_redirects=False).status_code == 404
     assert client.get("/auth/google/callback?code=a&state=b", follow_redirects=False).status_code == 404

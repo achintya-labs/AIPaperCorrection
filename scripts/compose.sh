@@ -19,4 +19,6 @@ fi
 
 PC="$ROOT/.venv/bin/podman-compose"
 [ -x "$PC" ] || { echo "podman-compose is not installed in this repo yet. Run: ./scripts/setup-dev.sh" >&2; exit 1; }
-exec "$PC" -p "$PROJECT" "$@"
+# Which gateway profile to start: from .env (AUTH_MODE=sso|local), default sso. Use `--profile` yourself to override.
+MODE=$(sed -n 's/^AUTH_MODE=//p' .env 2>/dev/null | head -1)
+exec "$PC" -p "$PROJECT" --profile "${MODE:-sso}" "$@"

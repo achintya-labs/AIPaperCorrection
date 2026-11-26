@@ -18,6 +18,14 @@ x-app-env: &app-env
   PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
   BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
   BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+  # Sign-in: "sso" (the gateway signs people in, LDAP holds accounts and roles) or "local" (passwords / Google).
+  AUTH_MODE: ${AUTH_MODE:-sso}
+  LDAP_URL: ldap://lldap:3890
+  LDAP_BASE_DN: ${LDAP_BASE_DN:-dc=example,dc=com}
+  LDAP_BIND_DN: uid=${LDAP_OBSERVER_USER:-tinyauth_observer},ou=people,${LDAP_BASE_DN:-dc=example,dc=com}
+  LDAP_BIND_PASSWORD: ${LDAP_OBSERVER_PASSWORD:-}
+  LDAP_ADMIN_GROUP: ${LDAP_ADMIN_GROUP:-papergrader_admins}
+  LDAP_TA_GROUP: ${LDAP_TA_GROUP:-papergrader_tas}
   GRADER_PROVIDER: ${GRADER_PROVIDER:-claude_runner}
   CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5-5}
   CLAUDE_SPLIT_MODEL: ${CLAUDE_SPLIT_MODEL:-}
@@ -55,9 +63,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:8000:8000"  # dev convenience only; users never need to reach the API directly
-    restart: unless-stopped
+    restart: unless-stopped  # no published port: only the web service (and the worker) talk to the API
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -140,6 +146,11 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       # The browser only talks to this service; it proxies /api/* to the API over the compose network.
       API_INTERNAL_URL: http://api:8000
+      AUTH_MODE: ${AUTH_MODE:-sso}
+      # Where "Log out" goes in sso mode (the gateway's login portal); empty hides the button.
+      LOGOUT_URL: ${LOGOUT_URL:-}
+      # Where the Admin page links to for managing accounts (the LLDAP UI).
+      LDAP_ADMIN_URL: ${LDAP_ADMIN_URL:-}
     depends_on:
       api:
         condition: service_healthy
@@ -147,13 +158,13 @@ services:
     # Node as PID 1 ignores SIGTERM, so `stop`/`restart` would wait out the whole grace period and then
     # SIGKILL it. A tiny init process forwards the signal.
     init: true
-    ports:
-      - "127.0.0.1:4321:4321"  # plain HTTP, this machine only; everyone else comes in through `proxy` (HTTPS)
+    # No published port: people come in through `caddy` (sso, the default) or `proxy` (local mode).
 
-  # HTTPS reverse proxy: the only service published on the network. Needs certs/tls.crt + certs/tls.key
+  # HTTPS reverse proxy for AUTH_MODE=local: the only service published on the network. Needs certs/tls.crt + certs/tls.key
   # (self-signed: ./scripts/make-cert.sh <host-or-ip>...). Rootless podman cannot bind ports below 1024,
   # hence the 8443 default; set HTTPS_PORT=443 where that is allowed.
   proxy:
+    profiles: ["local"]  # AUTH_MODE=local only; with sso the gateway below is the front door
     image: docker.io/library/nginx:1-alpine
     ports:
       - "${HTTPS_PORT:-8443}:443"
@@ -165,7 +176,182 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------------------------------------------
+  # AUTH_MODE=sso (the default): the gateway. Nothing else publishes a port. People reach https://<DOMAIN>:<HTTPS_PORT>.
+  # Caddy (Coraza WAF + OWASP CRS) -> Tinyauth (login: LDAP users, optional Google) -> web. Users live in LLDAP (Postgres).
+  # ---------------------------------------------------------------------------------------------------------------
+  caddy:
+    profiles: ["sso"]
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: ${PAPERGRADER_REGISTRY:-localhost/papergrader}/gateway:${PAPERGRADER_TAG:-local}
+    environment:
+      DOMAIN: ${DOMAIN:-lan.internal}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      # LLDAP user ids (a regex, e.g. admin|alice) allowed to open the LLDAP UI; everyone else gets a 403 page. See gateway/Caddyfile
+      LLDAP_ADMIN_USERS: ${LLDAP_ADMIN_USERS:-admin}
+    ports:
+      - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-5904}:443"
+    volumes:
+      - ./gateway/tls:/etc/caddy/tls:ro,z
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [default, edge]
+    depends_on:
+      tinyauth:
+        condition: service_started
+      web:
+        condition: service_started
+    restart: unless-stopped
+
+  tinyauth:
+    profiles: ["sso"]
+    image: ghcr.io/tinyauthapp/tinyauth:${TINYAUTH_VERSION:-v5.2.0}
+    environment:
+      TINYAUTH_APPURL: https://auth.${DOMAIN:-lan.internal}:${HTTPS_PORT:-5904}
+      TINYAUTH_AUTH_SECURECOOKIE: "true"
+      # The login screen's wording (set LOGIN_TITLE / LOGIN_FORGOT_MESSAGE in .env to change it)
+      TINYAUTH_UI_TITLE: ${LOGIN_TITLE:-Paper Grader}
+      TINYAUTH_UI_FORGOTPASSWORDMESSAGE: ${LOGIN_FORGOT_MESSAGE:-Ask the administrator to reset your password.}
+      # Optional break-glass local users: user:bcrypt_hash[,user2:hash2] (escape $ as $$ in .env)
+      TINYAUTH_AUTH_USERS: ${TINYAUTH_USERS:-}
+      # Optional Google sign-in (redirect URI: https://auth.<DOMAIN>:<HTTPS_PORT>/api/oauth/callback/google)
+      TINYAUTH_OAUTH_PROVIDERS_GOOGLE_CLIENTID: ${GOOGLE_CLIENT_ID:-}
+      TINYAUTH_OAUTH_PROVIDERS_GOOGLE_CLIENTSECRET: ${GOOGLE_CLIENT_SECRET:-}
+      TINYAUTH_OAUTH_WHITELIST: ${OAUTH_WHITELIST:-}
+      # LDAP users, managed in the LLDAP UI. Plain LDAP, but only over this private network.
+      TINYAUTH_LDAP_ADDRESS: ldap://lldap:3890
+      TINYAUTH_LDAP_BINDDN: uid=${LDAP_OBSERVER_USER:-tinyauth_observer},ou=people,${LDAP_BASE_DN:-dc=example,dc=com}
+      TINYAUTH_LDAP_BINDPASSWORD: ${LDAP_OBSERVER_PASSWORD:-}
+      TINYAUTH_LDAP_BASEDN: ${LDAP_BASE_DN:-dc=example,dc=com}
+      TINYAUTH_LDAP_SEARCHFILTER: (uid=%s)
+      TINYAUTH_LDAP_INSECURE: "true"
+    networks: [default, edge]  # edge: outbound internet for Google sign-in
+    depends_on:
+      lldap-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Creates the `lldap` role and database inside the app's Postgres. Idempotent, and a service rather than an init script
+  # because /docker-entrypoint-initdb.d only runs on a brand-new data volume, not on an existing install.
+  lldap-db-init:
+    profiles: ["sso"]
+    image: docker.io/library/postgres:16
+    restart: "no"
+    environment:
+      PGPASSWORD: ${DB_PASSWORD:-grader}
+      LLDAP_DB_PASSWORD: ${LLDAP_DB_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        P="psql -h db -U grader -d postgres -v ON_ERROR_STOP=1 -tA"
+        have_role=$$($$P -c "SELECT 1 FROM pg_roles WHERE rolname='lldap'")
+        [ "$$have_role" = 1 ] || $$P -c "CREATE ROLE lldap LOGIN"
+        $$P -c "ALTER ROLE lldap PASSWORD '$$LLDAP_DB_PASSWORD'"
+        have_db=$$($$P -c "SELECT 1 FROM pg_database WHERE datname='lldap'")
+        [ "$$have_db" = 1 ] || $$P -c "CREATE DATABASE lldap OWNER lldap"
+
+  lldap:
+    profiles: ["sso"]
+    image: docker.io/lldap/lldap:stable
+    environment:
+      LLDAP_JWT_SECRET: ${LLDAP_JWT_SECRET:-}
+      LLDAP_KEY_SEED: ${LLDAP_KEY_SEED:-}
+      LLDAP_LDAP_BASE_DN: ${LDAP_BASE_DN:-dc=example,dc=com}
+      LLDAP_LDAP_USER_PASS: ${LLDAP_ADMIN_PASSWORD:-}
+      LLDAP_LDAP_USER_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+      LLDAP_DATABASE_URL: postgres://lldap:${LLDAP_DB_PASSWORD:-}@db/lldap
+    depends_on:
+      lldap-db-init:
+        condition: service_completed_successfully
+    # Declared here rather than relying on the image's own HEALTHCHECK: Podman drops it, and lldap-bootstrap waits on
+    # `service_healthy`, which then never comes (the stack just sits at "Created").
+    healthcheck:
+      test: ["CMD", "/app/lldap", "healthcheck", "--config-file", "/data/lldap_config.toml"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped  # no published ports: the UI is served through caddy, LDAP is for tinyauth and the api
+
+  # One-shot: the read-only account Tinyauth and the app bind with, the two role groups, and the built-in admin as an app admin.
+  # It never imports people: moving users from an older install is a manual step (./run.sh migrate).
+  lldap-bootstrap:
+    profiles: ["sso"]
+    image: docker.io/lldap/lldap:stable
+    restart: "no"
+    depends_on:
+      lldap:
+        condition: service_healthy
+    environment:
+      # trailing dot: alpine curl (c-ares) fails on relative names when the host resolv.conf has ndots:0
+      LLDAP_URL: http://lldap.:17170
+      LLDAP_ADMIN_USERNAME: admin
+      LLDAP_ADMIN_PASSWORD: ${LLDAP_ADMIN_PASSWORD:-}
+      USER_CONFIGS_DIR: /tmp/bootstrap/user-configs
+      GROUP_CONFIGS_DIR: /tmp/bootstrap/group-configs
+      OBSERVER_USER: ${LDAP_OBSERVER_USER:-tinyauth_observer}
+      OBSERVER_PASSWORD: ${LDAP_OBSERVER_PASSWORD:-}
+      ADMIN_GROUP: ${LDAP_ADMIN_GROUP:-papergrader_admins}
+      TA_GROUP: ${LDAP_TA_GROUP:-papergrader_tas}
+      ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p "$$USER_CONFIGS_DIR" "$$GROUP_CONFIGS_DIR"
+        jq -n --arg n "$$ADMIN_GROUP" '{name:$$n}' > "$$GROUP_CONFIGS_DIR/admins.json"
+        jq -n --arg n "$$TA_GROUP" '{name:$$n}' > "$$GROUP_CONFIGS_DIR/tas.json"
+        jq -n --arg id "$$OBSERVER_USER" --arg pw "$$OBSERVER_PASSWORD" \
+          '{id:$$id, email:($$id+"@localhost"), password:$$pw, groups:["lldap_strict_readonly"]}' \
+          > "$$USER_CONFIGS_DIR/observer.json"
+        # LLDAP's built-in administrator is also an app admin (no password here: the one in .env is not touched)
+        jq -n --arg e "$$ADMIN_EMAIL" --arg g "$$ADMIN_GROUP" \
+          '{id:"admin", email:$$e, displayName:"Admin", groups:["lldap_admin", $$g]}' > "$$USER_CONFIGS_DIR/admin.json"
+        exec /app/bootstrap.sh
+
+  # MANUAL, never started by `up`: imports the users exported from an older install (./ldap-bootstrap/users.jsonl) into LLDAP.
+  # Run it through ./run.sh migrate. Accounts are created WITHOUT passwords and put in their role group.
+  lldap-import:
+    profiles: ["migrate"]
+    image: docker.io/lldap/lldap:stable
+    restart: "no"
+    environment:
+      LLDAP_URL: http://lldap.:17170
+      LLDAP_ADMIN_USERNAME: admin
+      LLDAP_ADMIN_PASSWORD: ${LLDAP_ADMIN_PASSWORD:-}
+      USER_CONFIGS_DIR: /tmp/bootstrap/user-configs
+      GROUP_CONFIGS_DIR: /tmp/bootstrap/group-configs
+    volumes:
+      - ./ldap-bootstrap:/bootstrap-input:ro,z
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p "$$USER_CONFIGS_DIR" "$$GROUP_CONFIGS_DIR"
+        [ -s /bootstrap-input/users.jsonl ] || { echo "nothing to import: users.jsonl is empty or missing" >&2; exit 1; }
+        # one JSON object per line (written by run.sh on the host); ids are checked because they become file names
+        while IFS= read -r line; do
+          [ -n "$$line" ] || continue
+          uid=$$(printf '%s' "$$line" | jq -r .id)
+          case "$$uid" in ""|null|*[!a-z0-9._-]*) echo "skipping an export line with a bad id" >&2; continue ;; esac
+          printf '%s\n' "$$line" > "$$USER_CONFIGS_DIR/$$uid.json"
+        done < /bootstrap-input/users.jsonl
+        exec /app/bootstrap.sh
+
+networks:
+  default: {}  # declared explicitly: podman-compose refuses `networks: [default, ...]` on a service otherwise
+  edge:  # caddy and tinyauth only: outbound internet (Google sign-in) and the published port
+
 volumes:
   dbdata:
   storage:
   claude-home:
+  caddy_data:
+  caddy_config:

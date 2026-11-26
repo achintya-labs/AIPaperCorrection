@@ -6,6 +6,8 @@ interface Props { title: string; wide?: boolean }
 const { title, wide = false } = Astro.props;
 const user = Astro.locals.user;
 const path = Astro.url.pathname;
+const sso = (process.env.AUTH_MODE ?? "sso") !== "local";
+const logoutUrl = process.env.LOGOUT_URL ?? "";
 ---
 <!doctype html>
 <html lang="en">
@@ -39,7 +41,8 @@ const path = Astro.url.pathname;
             </span>
             <span class="badge neutral">{user.role === "admin" ? "Admin" : "TA"}</span>
           </a>
-          <button id="logout">Log out</button>
+          {!sso && <button id="logout">Log out</button>}
+          {sso && logoutUrl && <a class="btn" href={logoutUrl}>Log out</a>}
         </div>
       </header>
     )}

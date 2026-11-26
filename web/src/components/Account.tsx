@@ -3,7 +3,7 @@ import { api, errMsg } from "../lib/api";
 import type { User } from "../lib/types";
 import { Alert } from "./ui";
 
-export default function Account() {
+export default function Account({ sso = false, ldapAdminUrl = "" }: { sso?: boolean; ldapAdminUrl?: string }) {
   const [me, setMe] = useState<User | null>(null);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -35,6 +35,21 @@ export default function Account() {
     } catch (err) {
       setError(errMsg(err));
     } finally { setBusy(false); }
+  }
+
+  if (sso) {
+    return (
+      <div className="stack" style={{ maxWidth: 480 }}>
+        <h1>Account</h1>
+        {me && <p className="muted">{me.name ? `${me.name} · ` : ""}{me.email} · {me.role === "admin" ? "Admin" : "TA"}</p>}
+        <div className="card stack">
+          <p style={{ margin: 0 }}>
+            Your sign-in, name and role are managed in the user directory (LDAP), not here. Change your password or name
+            there{ldapAdminUrl ? <> at <a href={ldapAdminUrl}>{ldapAdminUrl.replace(/^https?:\/\//, "")}</a></> : ""}, and ask an administrator to change your role.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (

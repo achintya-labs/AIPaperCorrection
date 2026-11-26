@@ -18,7 +18,8 @@ ranges (it prints the one-line fix if not), uses `podman-compose` if you already
 In a release bundle it pulls the published images (tag `latest`); in a git checkout it builds them.
 
 ```sh
-./run.sh --host grader.example.edu --admin-email me@example.edu   # first run: .env + certificate + start
+./run.sh --domain lan.internal --admin-email me@example.edu   # first run: .env, gateway secrets, start (sso)
+./run.sh --auth-mode local --host grader.example.edu          # or: the old password login + nginx HTTPS
 ./run.sh login        # once: sign Claude in
 ./run.sh pullup       # update to the latest release (down, pull, up)
 ```
@@ -31,11 +32,12 @@ In a release bundle it pulls the published images (tag `latest`); in a git check
 | `./run.sh pull` | `podman-compose pull` (release bundles only) |
 | `./run.sh pullup` | `down`, `pull`, `up` |
 | `./run.sh status`, `logs [service]`, `login`, `env` | `ps`, `logs -f`, the Claude sign-in, where `.env` is |
+| `./run.sh migrate` | sso, **manual only** (never part of `up`): copy the app's existing users into LLDAP. `export-users` does just the export |
 
-The first run writes `.env` (mode 600) with fresh `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and a random
-first-admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and makes a
-self-signed certificate. It never overwrites an existing `.env` or certificate. Everything below is the same thing
-done by hand.
+The first run writes `.env` (mode 600) with fresh `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD`, the LLDAP and
+Tinyauth secrets and a random LDAP admin password, sets `AUTH_MODE`, `DOMAIN`, `HTTPS_PORT`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`
+(local mode also makes a self-signed certificate). It never overwrites an existing `.env`. Everything below is the same thing
+done by hand (local mode).
 
 ```sh
 cp .env.example .env
@@ -50,9 +52,49 @@ cp .env.example .env
 ./scripts/claude-login.sh          # once: sign Claude in
 ```
 
-Open **https://localhost:8443** (self-signed certificate: accept the browser warning) and sign in as the bootstrap
+With `AUTH_MODE=local`, open **https://localhost:8443** (self-signed certificate: accept the browser warning) and sign in as the bootstrap
 admin. `compose` refuses to start if `CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty, and the `proxy` needs `certs/`.
-See [HTTPS reverse proxy](#https-reverse-proxy) for ports and real certificates.
+See [HTTPS reverse proxy](#https-reverse-proxy-auth_modelocal-only) for ports and real certificates.
+
+### Single sign-on (the default, `AUTH_MODE=sso`)
+
+Login is handled by a gateway that runs in the same compose, on the private network, and is the **only** thing published on
+the network (`HTTPS_PORT`, default **5904**):
+
+```
+browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, optional Google) -> web -> api
+                                                                 users + groups: LLDAP (stored in the app's Postgres)
+```
+
+- **URLs:** `https://<DOMAIN>:5904` (the app), `auth.<DOMAIN>:5904` (login portal), `lldap.<DOMAIN>:5904` (user admin).
+  `DOMAIN` defaults to `lan.internal`; `./run.sh --domain school.internal` changes it. Add
+  `<this machine's IP>  <DOMAIN> auth.<DOMAIN> lldap.<DOMAIN>` to `/etc/hosts` on every machine that browses to it.
+  `run.sh` makes a **self-signed** certificate for the three names (`gateway/tls/`, valid 365 days, redone automatically when `DOMAIN`
+  changes); accept the browser warning once for each name, including `auth.<DOMAIN>` because signing in redirects there. (Caddy's own CA
+  isn't used: every browser would have to trust its root, and one that has met another "Caddy Local Authority" rejects the new one with
+  "invalid signature".) For a real certificate, replace `wildcard.crt`, `wildcard.key` and `tls.caddy` in `gateway/tls/` and delete
+  `gateway/tls/.domain` (see the comment at the top of [gateway/Caddyfile](../gateway/Caddyfile)).
+- **Who may use the app is decided by LDAP groups.** Tinyauth authenticates the person and passes `Remote-User`, `Remote-Name`
+  and `Remote-Email`. The API looks the email up in LDAP (a read-only bind account): members of **`papergrader_admins`** are admins,
+  members of **`papergrader_tas`** are TAs, anyone in neither gets "not enrolled" (403). Manage people in LLDAP
+  (`https://lldap.<DOMAIN>:5904`, user `admin`, password `LLDAP_ADMIN_PASSWORD` in `.env`). Group names are `LDAP_ADMIN_GROUP` / `LDAP_TA_GROUP`.
+- **The `users` table is only a cache** that papers, grades and assignments point at. Rows follow LDAP (name, role, enrolled or not)
+  and are matched by LDAP uid, else by case-insensitive email. There are no passwords, no Google sign-in and no login page in the
+  app; the Admin page's Users section is a read-only directory list with a link to LLDAP. TAs who never signed in can still be assigned
+  (listing users and importing sync the directory into the cache first).
+- **Why the headers can be trusted:** `web` and `api` publish no port and sit on a private network where only `caddy` reaches `web`; Caddy's
+  `forward_auth` sets the `Remote-*` headers from Tinyauth's answer. `AUTH_MODE=local` (below) does not rely on any of that.
+- **Moving an older install:** `./run.sh up` on an `.env` with no `AUTH_MODE` switches it to sso, generates the gateway secrets and starts
+  the gateway. **It does not touch your users.** When you want them in LDAP, run **`./run.sh migrate`** yourself: it exports the existing
+  active users (`ldap-bootstrap/users.jsonl`) and imports them into LLDAP, each in the group matching their old role. It is never run by
+  `up`, so resets don't repeat it, and it is safe to run again. Everyone keeps their papers and grades: on their first sign-in they are
+  matched by email. **Passwords cannot be carried over** (LDAP can't import the stored hashes): people sign in with Google (set
+  `OAUTH_WHITELIST` and the Google keys) or an admin sets their password in LLDAP. Anyone who should keep access but isn't in a group sees "not enrolled".
+- **The WAF** is the OWASP Core Rule Set, unchanged. If it blocks something legitimate (403 from Caddy, usually a rubric, CSV or very large
+  PDF upload; the default request body limit is 13 MB), find the rule id (enable `SecAuditEngine` in `gateway/Caddyfile`) and add a narrowly
+  scoped exclusion there, as is already done for LLDAP's GraphQL endpoint.
+- **Logging out** goes to Tinyauth (`LOGOUT_URL`). **`AUTH_MODE=local`** keeps the app's own password / Google login behind the nginx proxy
+  (development, the test suite, or break-glass if the gateway is down); switch with `./run.sh --auth-mode local up`.
 
 ### Podman
 
@@ -70,11 +112,14 @@ refuses short names when it can't prompt. Containers are named `<project>_<servi
 
 ### First-run checklist
 
-1. `docker compose ps`: `db` and `claude` show *healthy*; `api`, `worker`, `web` are up.
-2. Exams page shows no "Grading isn't ready" banner (or `GET /grader/status` returns `"ready": true`).
-3. Create a TA (Users), an exam, and a rubric.
-4. Import one or two PDFs with *Preview* first, assigned to your TA.
-5. The papers go `queued` → `grading` → `ready for review`; sign in as the TA and review one.
+1. `./run.sh status`: `db`, `claude` and `lldap` show *healthy*; `api`, `worker`, `web`, `tinyauth` and `caddy` are up; `lldap-db-init` and
+   `lldap-bootstrap` have *Exited (0)* (they are one-shot).
+2. The hosts file on the browsing machine has `<DOMAIN>`, `auth.<DOMAIN>` and `lldap.<DOMAIN>`; `https://<DOMAIN>:5904` shows the login portal.
+3. Sign in as `admin` (password `LLDAP_ADMIN_PASSWORD`). The Exams page shows no "Grading isn't ready" banner (or `GET /grader/status`
+   returns `"ready": true`); if it does, run `./run.sh login`.
+4. In LLDAP add a TA and put them in `papergrader_tas`; check they appear on the Admin page. (`AUTH_MODE=local`: add them on the Admin page.)
+5. Create an exam and a rubric, import one or two PDFs with *Preview* first, assigned to your TA.
+6. The papers go `uploaded` → (you press Grade) `queued` → `grading` → `ready for review`; sign in as the TA and review one.
 
 ## Configuration reference
 
@@ -115,6 +160,19 @@ Rows marked *not wired* have a default in `api/app/config.py` but are not passed
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1` | web (runtime) | Hostnames users browse to; see below |
 | `PAPERGRADER_REGISTRY`, `PAPERGRADER_TAG` | `localhost/papergrader`, `local` (bundle: `ghcr.io/<owner>/<repo>`, `latest`) | compose | Which images to use; override to pin a version of [published images](development.md#running-the-published-images) |
 | `API_INTERNAL_URL` | `http://api:8000` (compose) | web | Where the proxy forwards `/api/*` |
+| `AUTH_MODE` | `sso` | api, worker, web | `sso`: the gateway signs people in and LDAP decides roles; `local`: the app's own password / Google login. `run.sh` writes it |
+| `DOMAIN` | `lan.internal` | caddy, tinyauth | Base domain: the app is `<DOMAIN>`, the login portal `auth.<DOMAIN>`, user admin `lldap.<DOMAIN>` (two or more labels) |
+| `HTTPS_PORT`, `HTTPS_BIND` | `5904` (sso) / `8443` (local), `0.0.0.0` | caddy / proxy | The one published HTTPS port and the interface it listens on. Rootless Podman can't bind below 1024 |
+| `ACME_EMAIL` | `admin@example.com` | caddy | Only for public domains (Let's Encrypt); unused with the self-signed certificate |
+| `LDAP_BASE_DN` | `dc=example,dc=com` | lldap, tinyauth, api | The directory's base DN |
+| `LDAP_ADMIN_GROUP`, `LDAP_TA_GROUP` | `papergrader_admins`, `papergrader_tas` | api, lldap-bootstrap | Members are admins / TAs; anyone in neither is "not enrolled" |
+| `LDAP_OBSERVER_USER`, `LDAP_OBSERVER_PASSWORD` | `tinyauth_observer`, generated | api, tinyauth, lldap-bootstrap | The read-only account the app and Tinyauth bind with (created by `lldap-bootstrap`) |
+| `LLDAP_ADMIN_PASSWORD` | generated | lldap | Password of LLDAP's built-in `admin`, the first app admin. Its email is `BOOTSTRAP_ADMIN_EMAIL` |
+| `LLDAP_JWT_SECRET`, `LLDAP_KEY_SEED`, `LLDAP_DB_PASSWORD` | generated | lldap | LLDAP's session secret, key seed and its Postgres role password. Changing the first logs everyone out of LLDAP; **don't change the seed** |
+| `TINYAUTH_USERS`, `OAUTH_WHITELIST`, `TINYAUTH_VERSION` | empty, empty, `v5.2.0` | tinyauth | Optional break-glass local users (`user:bcrypt_hash`, `$` doubled), emails/`@domain`s allowed to sign in with Google, image tag. Google also needs `GOOGLE_CLIENT_ID/SECRET` |
+| `LLDAP_ADMIN_USERS` | `admin` | caddy | Regex of the user ids that may open the LLDAP UI at all (e.g. `admin\|alice`): list every account in LLDAP's `lldap_admin` group. Everyone else gets a 403 page at `lldap.<DOMAIN>` (see [People](#managing-users)) |
+| `LOGIN_TITLE`, `LOGIN_FORGOT_MESSAGE` | `Paper Grader`, `Ask the administrator to reset your password.` | tinyauth | The login screen's title and the text of its "forgot password" page |
+| `LOGOUT_URL`, `LDAP_ADMIN_URL` | set by `run.sh` | web | Where "Log out" goes (Tinyauth) and the Admin page's "Manage in LLDAP" link; empty `LOGOUT_URL` hides the button |
 
 ### ALLOWED_HOSTS
 
@@ -128,12 +186,12 @@ and restart only the web container: `./scripts/compose.sh up -d --force-recreate
 proxy that rewrites `Host`, make sure it sends `X-Forwarded-Host` (the check prefers it).
 
 Behind HTTPS, terminate TLS in a reverse proxy (nginx, Caddy, Traefik) that forwards `Host` and
-`X-Forwarded-Proto`, and set `COOKIE_SECURE=true`. The compose file ships one: see [HTTPS](#https-reverse-proxy).
+`X-Forwarded-Proto`, and set `COOKIE_SECURE=true`. The compose file ships one: see [HTTPS](#https-reverse-proxy-auth_modelocal-only).
 
-### HTTPS reverse proxy
+### HTTPS reverse proxy (`AUTH_MODE=local` only)
 
-The `proxy` service (nginx, [proxy/nginx.conf](../proxy/nginx.conf)) terminates TLS and forwards to `web`. It is the
-only service published on the network: `web` is bound to `127.0.0.1:4321` and `api` to `127.0.0.1:8000`.
+With sso the Caddy gateway is the front door (see above). In local mode the `proxy` service (nginx, [proxy/nginx.conf](../proxy/nginx.conf))
+terminates TLS and forwards to `web`. It is the only service published on the network; `web` and `api` publish no host port.
 
 1. Make a certificate: `./scripts/make-cert.sh grader.school.edu 10.0.0.5` (names and/or IPs people will use;
    `localhost` and `127.0.0.1` are always included). It is **self-signed**, so browsers warn until the certificate
@@ -154,7 +212,7 @@ the user is active. Password login keeps working next to it.
 
 1. In Google Cloud Console → APIs & Services → Credentials, create an **OAuth client ID** of type *Web application*.
 2. Add the authorized redirect URI `<PUBLIC_BASE_URL>/api/auth/google/callback`
-   (for local dev: `http://localhost:4321/api/auth/google/callback`).
+   (local mode: `https://localhost:8443/api/auth/google/callback`).
 3. Put `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `PUBLIC_BASE_URL` (what users type in the browser, no trailing
    slash) in `.env`, then restart `api`. The login page now shows a "Sign in with Google" button.
 
@@ -209,7 +267,7 @@ then recreate the container: `docker compose up -d --force-recreate --no-deps cl
 ```sh
 docker compose logs -f worker          # "grading submission N" / "-> ready_for_review|failed"
 docker compose logs claude             # runner requests
-curl -s localhost:8000/health          # api liveness (dev port)
+podman exec papergrader_api_1 python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"   # api liveness
 ```
 
 `GET /grader/status` (admin) reports whether the grading backend is usable. **Admin → Models → Check quota** (`POST /grader/usage`)
@@ -238,7 +296,27 @@ TAs only see papers and exams assigned to them, so they only ever search within 
 
 ### Managing users
 
-Admins manage accounts on the **Admin** page (Users section) (or `PATCH`/`DELETE /auth/users/{id}`, see [api.md](api.md#auth)).
+**Single sign-on (default).** Accounts, names, passwords and roles are managed in LLDAP at `https://lldap.<DOMAIN>:5904` (log in as `admin`); the app's
+Admin page only lists who is enrolled and links there.
+
+| To | In LLDAP |
+|---|---|
+| Add a person | Users → *Create a user* (user id, email, name, password), then open them → *Group memberships* → add `papergrader_tas` or `papergrader_admins` |
+| Change their role | Move them between the two groups |
+| Remove access | Remove them from both groups (or delete the user). They see "not enrolled"; their papers, grades and review history stay |
+| Change name, email, password | Edit the user. The user id (the login name) can't change; an email change keeps the same app account (matched by LDAP uid) |
+| Let someone sign in with Google | Put their email (or `@domain`) in `OAUTH_WHITELIST` and set the Google keys in `.env`, then `./run.sh up` |
+
+**Only administrators can open LLDAP.** The app treats the email as the person's identity, and LLDAP lets every user edit their own profile (email and
+display name included), so ordinary users get no access to it: the gateway lets `lldap.<DOMAIN>` through only for the user ids in `LLDAP_ADMIN_USERS`
+(default `admin`; a regex such as `admin|alice`, which must name every account in LLDAP's `lldap_admin` group), and shows everyone else
+"User management is for administrators only." (403). The check uses the user signed in at the *gateway* (Tinyauth's `Remote-User`), after the WAF
+and before LLDAP's own login. Consequence: ordinary users can't change their own password in LLDAP either, so an administrator sets it for them. An
+app admin (member of `papergrader_admins`) who is not in `LLDAP_ADMIN_USERS` sees the Admin page's "Manage in LLDAP" link but gets the 403.
+
+Changes show up in the app within about 30 seconds (the directory answers are cached). A newly added person appears on the Admin page and in the TA
+pickers before they ever sign in, so you can assign papers first. LLDAP's UI sits behind the WAF; if an action returns an empty 403, see
+[Troubleshooting](#troubleshooting). The rest of this section is `AUTH_MODE=local`. Admins manage accounts on the **Admin** page (Users section) (or `PATCH`/`DELETE /auth/users/{id}`, see [api.md](api.md#auth)).
 
 - **Change role** (TA ↔ admin) and **deactivate/reactivate** take effect immediately, even for someone signed in.
 - **Deactivate** blocks sign-in and keeps their assignments and review history: the safe way to offboard a TA.
@@ -307,26 +385,31 @@ s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.pa
 ### Backups
 
 ```sh
-docker compose exec db pg_dump -U grader grader > backup.sql          # all grades, rubrics, users
+./scripts/compose.sh exec -T db pg_dump -U grader grader > backup.sql   # all grades, rubrics, the users cache
+./scripts/compose.sh exec -T db pg_dump -U grader lldap > lldap.sql     # sso: the people, passwords (hashed) and group memberships
 docker run --rm -v papergrader_storage:/data -v "$PWD":/out docker.io/library/alpine \
   tar czf /out/storage.tgz -C /data .                                 # PDFs and page images
 ```
 
 (The volume name is `<project>_storage`; run `docker volume ls` to confirm.) The Claude login is easiest to
-recreate with `claude-login.sh` than to back up.
+recreate with `claude-login.sh` than to back up. Also keep `.env` (all secrets: **`LLDAP_KEY_SEED` must stay the same** or LLDAP can no
+longer read its stored password hashes) and `gateway/tls/` if you installed your own certificate.
 
 ### Upgrades
 
 ```sh
-git pull && docker compose up --build -d
+git pull && ./run.sh up        # a git checkout: rebuilds the changed images, then recreates the containers
+./run.sh pullup                # a release bundle: down, pull `latest`, up
 ```
 
-The `api` container runs `alembic upgrade head` on start. Rubric versions and AI/TA grade columns are kept.
+The `api` container runs `alembic upgrade head` on start. Rubric versions and AI/TA grade columns are kept; the users, passwords and groups
+in LLDAP are untouched.
 
 ### Reset
 
-`docker compose down` stops the stack and keeps data. `docker compose down -v` also **deletes** the database,
-the stored scans **and the Claude login**.
+`./run.sh down` stops the stack and keeps data. Removing the volumes (`papergrader_dbdata`, `papergrader_storage`, `papergrader_claude-home`,
+`papergrader_caddy_data`) **deletes** the database (grades **and** the LLDAP users), the stored scans, the Claude login and Caddy's state.
+Delete `.env` as well to get new secrets. Neither a reset nor `up` ever re-imports old users: that is only ever `./run.sh migrate`, run by you.
 
 ## Restarts, reboots and durability
 
@@ -405,7 +488,7 @@ stopped with `podman kill` or `podman stop` is deliberately *not* restarted by i
 
 ```sh
 cd api && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-export DATABASE_URL=sqlite:///dev.db STORAGE_DIR=./storage GRADER_PROVIDER=fake JWT_SECRET=dev \
+export AUTH_MODE=local DATABASE_URL=sqlite:///dev.db STORAGE_DIR=./storage GRADER_PROVIDER=fake JWT_SECRET=dev \
        BOOTSTRAP_ADMIN_EMAIL=admin@example.com BOOTSTRAP_ADMIN_PASSWORD=devpassword
 alembic upgrade head
 uvicorn app.main:app --port 8000 &
@@ -427,7 +510,7 @@ More in [development.md](development.md): the commit hook that requires these to
 
 The API tests run on SQLite and use a stand-in `claude` executable, so they never call the real model. The
 end-to-end checks used during development (full stack through the proxy, and a real browser) are not part of
-the repository yet; see [libraries.md](libraries.md#testing).
+the repository yet; see [libraries.md](libraries.md#testing-and-quality).
 
 ## Troubleshooting
 
@@ -451,3 +534,14 @@ the repository yet; see [libraries.md](libraries.md#testing).
 | "You can't demote or deactivate yourself" / "At least one active admin is required" | Have another admin make the change, or promote someone first |
 | Telemetry not arriving | Endpoint unreachable from the container, `CLAUDE_CODE_ENABLE_TELEMETRY` not `1`, or the process was killed before flushing |
 | Podman: "short-name resolution" error | Use fully qualified image names (already done in this repo) |
+| Browser: "can't connect" to `<DOMAIN>:5904` | The hosts-file line is missing on that machine, or the gateway is down (`./run.sh status`: `caddy`, `tinyauth`, `lldap` must be up) |
+| Browser: certificate warning, or "invalid signature" | The certificate is self-signed: accept it for each of `<DOMAIN>`, `auth.<DOMAIN>` and `lldap.<DOMAIN>`. A *signature* error means the browser cached another CA with the same name (an old Caddy install): remove "Caddy Local Authority" from its certificate manager |
+| LLDAP page: "Error trying to fetch users [401]: Invalid JWT" | Another LLDAP on the same domain (an old gateway project) left a login cookie that this one can't verify, because cookies ignore ports. Clear cookies for the domain, stop the old stack, or use another `--domain` |
+| LLDAP: "Error trying to initiate adding the user to a group [403]", or any empty 403 from `https://…:5904` | The WAF (Coraza + OWASP CRS) blocked the request. Find the rule: `./run.sh logs caddy \| grep "Coraza: Warning"` shows the rule id and what matched. Add the narrowest exclusion to `gateway/Caddyfile` (one rule id, one field, one path, as for ids 10001 and 10002 there), then `./run.sh up` |
+| `lldap.<DOMAIN>` shows "User management is for administrators only." (403) | You are signed in as a user that is not in `LLDAP_ADMIN_USERS`. Add the id to `.env` (`admin\|alice`, every LLDAP admin account) and `./run.sh up`, or sign in as `admin` |
+| "Your account is not enrolled in Paper Grader" (403 page) | The person is in LDAP but in neither group. Add them to `papergrader_tas` or `papergrader_admins` in LLDAP; it applies within about 30 seconds |
+| "Not signed in" (401 page) | The app was reached without going through the gateway (a wrong address or port), so there was no `Remote-Email` |
+| "The user directory is unavailable" (503) | The app can't reach LLDAP: `./run.sh logs lldap`; check `LDAP_OBSERVER_PASSWORD` matches (it is applied by `lldap-bootstrap` on every `up`) |
+| `./run.sh up` stalls with `lldap-bootstrap`, `tinyauth`, `caddy` at "Created" | They wait for `lldap` to be *healthy*. Check `./run.sh logs lldap` (Postgres reachable? `lldap-db-init` exited 0?) |
+| Someone's password: "I can't sign in after migrating" | Migrated accounts have **no password**. Set one in LLDAP (Users, the person, Modify password), or whitelist their email for Google sign-in |
+| Error "missing networks" / "profile" from podman-compose | Use `./run.sh` or `./scripts/compose.sh`, which pass the right `--profile`; a plain `podman-compose` call sees only the services without a profile |

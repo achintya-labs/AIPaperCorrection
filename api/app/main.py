@@ -18,6 +18,8 @@ from app.routes import submissions as submission_routes
 
 def bootstrap_admin() -> None:
     s = get_settings()
+    if s.sso:  # accounts live in LDAP; the first admin is created there (see run.sh / the lldap-bootstrap service)
+        return
     if not (s.bootstrap_admin_email and s.bootstrap_admin_password):
         return
     with SessionLocal() as db:

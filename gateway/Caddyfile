@@ -1,0 +1,98 @@
+# The only service published on the network (HTTPS_PORT, default 5904). Order of handling for the app:
+#   Coraza WAF (OWASP CRS)  ->  Tinyauth forward_auth (login, LDAP / Google)  ->  web
+# Tinyauth sets Remote-User, Remote-Name and Remote-Email on the request that reaches the app; the app trusts them
+# because nothing but this container can reach it (no published ports, private network).
+#
+# Certificates: ./gateway/tls/ is mounted at /etc/caddy/tls and every site imports `*.caddy` from it. run.sh writes a self-signed
+# wildcard certificate there (wildcard.crt, wildcard.key and tls.caddy containing
+# `tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key`); replace the files for a real certificate. With nothing in the
+# folder Caddy falls back to its own internal CA for non-public names.
+{
+	email {$ACME_EMAIL}
+
+	# The public port is not 443 (rootless Podman), so there is no point redirecting :80, and HTTP/3 (UDP) is not published.
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+	}
+
+	# Run the WAF before every other handler (including forward_auth)
+	order coraza_waf first
+}
+
+(waf) {
+	coraza_waf {
+		load_owasp_crs
+		directives `
+			Include @coraza.conf-recommended
+			Include @crs-setup.conf.example
+			Include @owasp_crs/*.conf
+			SecRuleEngine On
+			# False positives: LLDAP's GraphQL query text (e.g. $filters, user( trips SQLi rules.
+			# Scoped to LLDAP's GraphQL endpoint and only the JSON "query" field; "variables"
+			# (the user-supplied data) is still fully inspected.
+			SecRule REQUEST_HEADERS:Host "@rx ^lldap\." "id:10001,phase:1,pass,nolog,chain"
+				SecRule REQUEST_URI "@beginsWith /api/graphql" "ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:json.query"
+			# CRS 932235 (Unix command injection) matches "addUser" inside the GraphQL mutation name addUserToGroup
+			# (adduser is a Unix command), which blocked adding people to groups in the LLDAP UI. Only that rule, only the
+			# "query" text field, only on LLDAP's GraphQL endpoint; the "variables" are still fully inspected.
+			SecRule REQUEST_HEADERS:Host "@rx ^lldap\." "id:10002,phase:1,pass,nolog,chain"
+				SecRule REQUEST_URI "@beginsWith /api/graphql" "ctl:ruleRemoveTargetById=932235;ARGS:json.query"
+		`
+	}
+}
+
+# Auth portal (login page, Google OAuth callback)
+auth.{$DOMAIN} {
+	import /etc/caddy/tls/*.caddy
+
+	reverse_proxy tinyauth:3000
+}
+
+# User management UI (LLDAP): WAF + Tinyauth gate in front of LLDAP's own login.
+lldap.{$DOMAIN} {
+	import /etc/caddy/tls/*.caddy
+
+	import waf
+
+	# Only administrators may reach LLDAP at all (LLDAP lets every user edit their own profile, including the email the app uses as
+	# the person's identity, so ordinary users get no access to the UI). Administrators are the user ids in LLDAP_ADMIN_USERS: a
+	# regex such as `admin` or `admin|alice` (default `admin`); list every account in LLDAP's lldap_admin group. The check uses
+	# Remote-User, which Tinyauth sets after login and the client cannot; a missing header matches nothing, so it is denied.
+	forward_auth tinyauth:3000 {
+		uri /api/auth/caddy
+		copy_headers Remote-User Remote-Name Remote-Email
+	}
+
+	@lldap_admin header_regexp Remote-User ^({$LLDAP_ADMIN_USERS:admin})$
+
+	handle @lldap_admin {
+		reverse_proxy lldap:17170
+	}
+
+	handle {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "User management is for administrators only." 403
+	}
+}
+
+# Paper Grader
+{$DOMAIN} {
+	import /etc/caddy/tls/*.caddy
+
+	import waf
+
+	forward_auth tinyauth:3000 {
+		uri /api/auth/caddy
+		copy_headers Remote-User Remote-Name Remote-Email
+	}
+
+	# Scans are large; the app enforces the real per-file limit (MAX_UPLOAD_MB). Stream uploads, long timeouts for exports.
+	reverse_proxy web:4321 {
+		flush_interval -1
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}

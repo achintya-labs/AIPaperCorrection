@@ -21,8 +21,13 @@ node_modules/
 dist/
 .astro/
 
-# TLS certificate and key for the reverse proxy
+# TLS certificate and key for the reverse proxy (local mode) and any custom certificate for the gateway (sso mode)
 certs/
+gateway/tls/*
+!gateway/tls/.gitkeep
+
+# users exported from an older install for the LDAP bootstrap (contains emails)
+ldap-bootstrap/
 
 # runtime data (anchored: an unanchored "storage/" also hid the api/app/storage Python package from git,
 # which broke CI with "No module named app.storage")

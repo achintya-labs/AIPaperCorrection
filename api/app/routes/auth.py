@@ -17,12 +17,21 @@ from app.auth import (
     set_session_cookie,
     verify_password,
 )
-from app.auth import google
+from app.auth import google, sso
+from app.auth.directory import Directory, get_directory
 from app.config import get_settings
 from app.db import get_db
 from app.models import Grade, Role, User, submission_tas
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def local_only() -> None:
+    """Passwords, Google sign-in and user management exist only in AUTH_MODE=local. With SSO the gateway signs people in
+    and LDAP holds the accounts."""
+    if get_settings().sso:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Accounts are managed in LDAP (single sign-on is enabled)")
+
 log = logging.getLogger(__name__)
 
 MIN_PASSWORD_CHARS = 8
@@ -95,7 +104,7 @@ class PasswordReset(BaseModel):
     password: BlankOrNewPassword
 
 
-@router.post("/login", response_model=UserOut)
+@router.post("/login", response_model=UserOut, dependencies=[Depends(local_only)])
 def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == body.email))
     # A blank password never signs anyone in, even if the account has none set (those use Google).
@@ -107,12 +116,14 @@ def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
 
 class ProvidersOut(BaseModel):
     google: bool
+    mode: str = "local"  # "sso": the gateway signs people in, there is no login page
 
 
 @router.get("/providers", response_model=ProvidersOut)
 def providers():
     """Which sign-in methods are configured, so the login page knows whether to show the Google button."""
-    return ProvidersOut(google=google.enabled())
+    sso_mode = get_settings().sso
+    return ProvidersOut(google=google.enabled() and not sso_mode, mode="sso" if sso_mode else "local")
 
 
 def _require_google() -> None:
@@ -120,7 +131,7 @@ def _require_google() -> None:
         raise HTTPException(404, "Google sign-in is not configured")
 
 
-@router.get("/google/login", status_code=302)
+@router.get("/google/login", status_code=302, dependencies=[Depends(local_only)])
 def google_login():
     """Start Google sign-in: sets a short-lived signed cookie and redirects to Google."""
     _require_google()
@@ -133,7 +144,7 @@ def google_login():
     return resp
 
 
-@router.get("/google/callback", status_code=302)
+@router.get("/google/callback", status_code=302, dependencies=[Depends(local_only)])
 def google_callback(
     code: str | None = None,
     state: str | None = None,
@@ -185,7 +196,7 @@ def me(user: User = Depends(current_user)):
     return user
 
 
-@router.put("/me/password", status_code=204)
+@router.put("/me/password", status_code=204, dependencies=[Depends(local_only)])
 def change_own_password(
     body: PasswordChange,
     response: Response,
@@ -206,7 +217,7 @@ def change_own_password(
     set_session_cookie(response, user)  # a fresh token under the new version keeps this browser signed in
 
 
-@router.post("/users", response_model=UserOut, status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/users", response_model=UserOut, status_code=201, dependencies=[Depends(require_admin), Depends(local_only)])
 def create_user(body: UserCreate, db: Session = Depends(get_db)):
     if db.scalar(select(User).where(User.email == body.email)):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already exists")
@@ -251,11 +262,15 @@ def _admin_out(db: Session, users: list[User]) -> list[UserAdminOut]:
 
 
 @router.get("/users", response_model=list[UserAdminOut], dependencies=[Depends(require_admin)])
-def list_users(db: Session = Depends(get_db)):
+def list_users(db: Session = Depends(get_db), directory: Directory = Depends(get_directory)):
+    """Local mode: the users table. SSO mode: the LDAP directory (enrolled users); the cache is synced first so every
+    listed person has an id (for TA assignment) and people who left the groups drop out."""
+    if get_settings().sso:
+        sso.sync_directory(db, directory)
     return _admin_out(db, list(db.scalars(select(User).order_by(User.id)).all()))
 
 
-@router.put("/users/{user_id}/password", status_code=204)
+@router.put("/users/{user_id}/password", status_code=204, dependencies=[Depends(local_only)])
 def reset_user_password(
     user_id: int,
     body: PasswordReset,
@@ -287,7 +302,7 @@ def _guard_last_admin(db: Session, target: User) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, "At least one active admin is required")
 
 
-@router.patch("/users/{user_id}", response_model=UserAdminOut)
+@router.patch("/users/{user_id}", response_model=UserAdminOut, dependencies=[Depends(local_only)])
 def update_user(
     user_id: int,
     body: UserUpdate,
@@ -317,7 +332,7 @@ def update_user(
     return _admin_out(db, [user])[0]
 
 
-@router.delete("/users/{user_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/users/{user_id}", status_code=204, dependencies=[Depends(require_admin), Depends(local_only)])
 def delete_user(
     user_id: int,
     force: bool = False,

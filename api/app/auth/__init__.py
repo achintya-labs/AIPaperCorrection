@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
-from fastapi import Cookie, Depends, HTTPException, Response, status
+from fastapi import Cookie, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
+from app.auth import sso
+from app.auth.directory import Directory, DirectoryError, get_directory
 from app.config import get_settings
 from app.db import get_db
 from app.models import Role, User
@@ -49,10 +51,30 @@ def set_session_cookie(response: Response, user: User) -> None:
     )
 
 
+def _sso_user(remote_email: str | None, remote_name: str | None, db: Session, directory: Directory) -> User:
+    """SSO: the gateway sets Remote-Email after authenticating (and removes any client-sent copy; only the gateway can
+    reach this service). Enrolled = member of the admin or TA group in LDAP."""
+    email = (remote_email or "").strip()
+    if not email:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    try:
+        entry = directory.find(email)
+    except DirectoryError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "The user directory is unavailable")
+    if entry is None or entry.role is None:
+        sso.deactivate_cached(db, email)
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Your account is not enrolled in Paper Grader")
+    return sso.sync_user(db, entry, (remote_name or "").strip()[:255])
+
+
 def current_user(
+    request: Request,
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: Session = Depends(get_db),
+    directory: Directory = Depends(get_directory),
 ) -> User:
+    if get_settings().sso:  # read from the request, not declared as Header params: they'd litter every OpenAPI operation
+        return _sso_user(request.headers.get("remote-email"), request.headers.get("remote-name"), db, directory)
     unauthorized = HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     if not session:
         raise unauthorized

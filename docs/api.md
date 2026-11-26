@@ -11,17 +11,17 @@ regenerated with `python scripts/export-openapi.py`. The running API also serves
 
 ## Conventions
 
-**Base URL.** Browsers use `/api/...` on the web service (`https://localhost:8443/api` through the HTTPS proxy, or `http://localhost:4321/api` on the host itself), which proxies to the API
-with the prefix removed. For scripts in development the API is published on `http://127.0.0.1:8000`; the
-examples below use that, with `API=http://127.0.0.1:8000`. In production only the web service should be
-exposed, so use `https://your-host/api` and add two things the proxy's CSRF check wants on non-GET requests:
-an `Origin: https://your-host` header and, for body-less POSTs, `Content-Type: application/json`.
+**Base URL.** Browsers use `/api/...` on the web service, which proxies to the API with the prefix removed. No host port
+reaches the API directly: in sso mode everything goes through the gateway (`https://<DOMAIN>:5904/api`, after signing in), in
+local mode through the nginx proxy (`https://localhost:8443/api`; add `-k` to curl for the self-signed certificate). The examples
+below use `API=https://localhost:8443/api` (local mode) and add two things the web service's CSRF check wants on non-GET requests:
+an `Origin: https://localhost:8443` header and, for body-less POSTs, `Content-Type: application/json`.
 
-**Authentication.** `POST /auth/login` sets an HttpOnly cookie named `session` (a signed JWT). Send it back on
+**Authentication (local mode).** `POST /auth/login` sets an HttpOnly cookie named `session` (a signed JWT). Send it back on
 every call. With curl keep a cookie jar:
 
 ```sh
-API=http://127.0.0.1:8000
+API=https://localhost:8443/api
 curl -s -c jar -H 'content-type: application/json' \
      -d '{"email":"admin@example.com","password":"…"}' $API/auth/login
 curl -s -b jar $API/auth/me
@@ -67,6 +67,13 @@ Violations are 422 with `{"detail": [{"loc": ["body", "new_password"], "msg": "P
 
 ## Auth
 
+**Two modes (`AUTH_MODE`).** `sso` (default): a gateway authenticates people and every request carries `Remote-Email` (and `Remote-Name`);
+the API looks the email up in LDAP (members of the admin / TA group are admins / TAs, anyone else gets **403** "Your account is not enrolled
+in Paper Grader", a missing header **401**, an unreachable directory **503**). The `users` table is a cache kept in step with LDAP, so there
+is no session cookie, and `POST /auth/login`, the Google endpoints, `PUT /auth/me/password`, `POST /auth/users`, `PATCH`/`DELETE
+/auth/users/{id}` and `PUT /auth/users/{id}/password` return **409** "Accounts are managed in LDAP". `GET /auth/users` then returns the LDAP
+directory (enrolled users, syncing the cache first). `local`: everything below as described.
+
 ### `POST /auth/login`
 Public. Body `{"email": str, "password": str}`. A blank `password` is always **401**, and so is any account that has no password (Google-only).
 **200** → `UserOut` and `Set-Cookie: session=…; HttpOnly; SameSite=Lax` (`Secure` if `COOKIE_SECURE=true`; max-age =
@@ -77,7 +84,8 @@ Public. Body `{"email": str, "password": str}`. A blank `password` is always **4
 ```
 
 ### `GET /auth/providers`
-Public. **200** `{"google": bool}`: whether Google sign-in is configured (the login page shows its button only then).
+Public. **200** `{"google": bool, "mode": "sso" | "local"}`: whether Google sign-in is configured (the login page shows its button only then;
+always `false` in sso) and the sign-in mode.
 
 ### `GET /auth/google/login`
 Public. Starts Google sign-in (authorization code + PKCE). **302** to Google and sets the short-lived `oauth_tx`

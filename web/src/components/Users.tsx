@@ -17,7 +17,7 @@ function generatePassword(length = 16) {
   return Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join("");
 }
 
-export default function Users() {
+export default function Users({ sso = false, ldapAdminUrl = "" }: { sso?: boolean; ldapAdminUrl?: string }) {
   const [users, setUsers] = useState<UserAdmin[] | null>(null);
   const [me, setMe] = useState<User | null>(null);
   const [form, setForm] = useState({ email: "", name: "", password: "", role: "ta" as Role });
@@ -129,6 +129,8 @@ export default function Users() {
       }
     } finally { setBusy(null); await load(); }
   }
+
+  if (sso) return <Directory users={users} error={error} ldapAdminUrl={ldapAdminUrl} q={q} setQ={setQ} />;
 
   const visible = (users ?? []).filter((u) =>
     matchesQuery([u.email, u.name, u.role === "admin" ? "admin" : "ta", u.active ? "active" : "inactive"], q),
@@ -248,4 +250,48 @@ function RoleSelect({
   ariaLabel?: string;
 }) {
   return <SelectMenu value={value} options={ROLES} onChange={onChange} disabled={disabled} title={title} ariaLabel={ariaLabel} />;
+}
+
+/** SSO mode: accounts, names and roles live in LDAP, so this is a read-only view of who is enrolled and as what. */
+function Directory({ users, error, ldapAdminUrl, q, setQ }: {
+  users: UserAdmin[] | null; error: string; ldapAdminUrl: string; q: string; setQ: (v: string) => void;
+}) {
+  const visible = (users ?? []).filter((u) =>
+    matchesQuery([u.email, u.name, u.role === "admin" ? "admin" : "ta", u.active ? "enrolled" : "not enrolled"], q),
+  );
+  return (
+    <div className="stack">
+      <h2 style={{ margin: 0 }}>Users</h2>
+      {error && <Alert tone="bad">{error}</Alert>}
+      <div className="card row between">
+        <span className="muted">
+          People and roles come from the user directory (LDAP). Add someone to the admin or TA group there to give them access.
+        </span>
+        {ldapAdminUrl && <a className="btn primary" href={ldapAdminUrl}>Manage in LLDAP</a>}
+      </div>
+      {users && users.length > 0 && (
+        <SearchBox value={q} onChange={setQ} label="Search users" placeholder="Search email, name, role, status"
+          shown={visible.length} total={users.length} />
+      )}
+      <div className="card table-card">
+        {!users ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : visible.length === 0 ? (
+          <NoMatches query={q} onClear={() => setQ("")} />
+        ) : (
+          <table>
+            <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Activity</th></tr></thead>
+            <tbody>
+              {visible.map((u) => (
+                <tr key={u.id}>
+                  <td><strong>{u.email}</strong>{u.name && <div className="muted small">{u.name}</div>}</td>
+                  <td><span className={`badge ${u.role === "admin" ? "" : "neutral"}`}>{u.role === "admin" ? "Admin" : "TA"}</span></td>
+                  <td><span className={`badge ${u.active ? "ok" : "bad"}`}>{u.active ? "enrolled" : "not enrolled"}</span></td>
+                  <td className="small muted">{plural(u.assigned_papers, "paper")} assigned · {plural(u.reviewed_grades, "grade")} reviewed</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
 }

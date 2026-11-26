@@ -18,6 +18,8 @@ from app import pdf
 from app.auth import require_admin
 from app.config import get_settings
 from app.db import get_db
+from app.auth import sso
+from app.auth.directory import Directory, get_directory
 from app.models import Exam, Role, SplitJob, SplitJobStatus, Student, Submission, SubmissionStatus, User
 from app.storage import Storage, get_storage
 
@@ -102,6 +104,7 @@ async def import_submissions(
     reviewers_per_paper: int = Form(1, ge=1),
     dry_run: bool = Form(False),
     db: Session = Depends(get_db),
+    directory: Directory = Depends(get_directory),
     storage: Storage = Depends(get_storage),
 ):
     """
@@ -144,6 +147,8 @@ async def import_submissions(
                 seen.add(sid)
                 sources.append((sid, f.filename or "", data, ""))
 
+    if get_settings().sso:  # TAs named in the CSV may never have signed in: pull the directory into the users cache first
+        await run_in_threadpool(sso.sync_directory, db, directory)
     users_by_email = {
         u.email.lower(): u
         for u in db.scalars(select(User).where(User.active, User.role == Role.ta))

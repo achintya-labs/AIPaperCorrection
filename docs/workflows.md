@@ -11,6 +11,9 @@ Source files are named next to each diagram so you can check them against the co
 6. [Request path and authentication](#6-request-path-and-authentication)
 7. [Claude login and readiness](#7-claude-login-and-readiness)
 8. [Restarts and recovery](#8-restarts-and-recovery)
+9. [Signing in with the gateway (sso)](#9-signing-in-with-the-gateway-sso)
+10. [People and roles](#10-people-and-roles)
+11. [Moving users from an older install (manual)](#11-moving-users-from-an-older-install-manual)
 
 ---
 
@@ -22,7 +25,7 @@ Who does what, from an empty system to an exported gradebook.
 flowchart TD
     subgraph setup["Admin: one-time setup"]
         A1["Start the stack"] --> A2["Sign Claude in once<br/>claude-login.sh"]
-        A2 --> A3["Create TA accounts"]
+        A2 --> A3["Add TAs in LLDAP<br/>group papergrader_tas"]
         A3 --> A4["Create exam"]
         A4 --> A5["Write rubric<br/>questions, max points, criteria"]
     end
@@ -317,6 +320,11 @@ flowchart TD
 
 ## 6. Request path and authentication
 
+**Single sign-on (the default, `AUTH_MODE=sso`).** The browser only ever talks to the Caddy gateway: Coraza WAF, then Tinyauth's
+`forward_auth` (login against LDAP, optionally Google), which adds `Remote-User/Name/Email`; `web` proxies `/api/*` to the API with those
+headers; the API looks the email up in LDAP (admin / TA group, else 403 "not enrolled") and keeps the `users` row in step. The diagrams
+below describe `AUTH_MODE=local` (the app's own cookie login). See [how-it-runs.md](how-it-runs.md#single-sign-on-the-default-auth_modesso).
+
 The browser only ever talks to the Astro `web` service. It serves pages and proxies `/api/*` to FastAPI over
 the private network, so the session cookie is same-origin and the API need not be public.
 
@@ -459,3 +467,99 @@ What this guarantees and what it doesn't:
 - **Unsaved work in a browser is lost** (a grade edit that was typed but not saved, an upload in flight).
 - Shutdown behaviour is tuned so restarts are fast: Postgres gets `SIGINT` (fast shutdown) and `web` runs under an
   init process so it obeys `SIGTERM`.
+
+---
+
+## 9. Signing in with the gateway (sso)
+
+What happens from typing the address to seeing the app. `caddy` is the only published service; everything behind it is on a private network.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor B as Browser
+    participant C as caddy (Coraza WAF + CRS)
+    participant T as tinyauth
+    participant L as lldap
+    participant W as web
+    participant A as api
+
+    B->>C: GET https://DOMAIN:5904/
+    C->>C: WAF rules (a match returns 403 here)
+    C->>T: forward_auth: is this session logged in?
+    T-->>C: 401 (no session)
+    C-->>B: 302 to https://auth.DOMAIN:5904/login?redirect=...
+    B->>T: username (LDAP uid) + password
+    T->>L: LDAP bind as the user
+    L-->>T: ok
+    T-->>B: session cookie for DOMAIN, redirect back to the app
+    B->>C: GET https://DOMAIN:5904/ (with cookie)
+    C->>T: forward_auth
+    T-->>C: 200 + Remote-User, Remote-Name, Remote-Email
+    C->>W: request with the Remote-* headers
+    W->>A: GET /auth/me (headers forwarded)
+    A->>L: read-only bind: find person by mail, read groups
+    L-->>A: uid, name, member of papergrader_tas
+    A->>A: upsert the users-table cache row (same id as before if the email matches)
+    A-->>W: user (role ta)
+    W-->>B: the page (My queue)
+```
+
+Failure branches, all decided by the API on every request (LDAP answers are cached ~30 s):
+
+| Situation | Result |
+|---|---|
+| No `Remote-Email` (reached without the gateway) | 401 "Not signed in" page |
+| In LDAP but in neither group | 403 "Your account is not enrolled in Paper Grader" page; their cached row is deactivated |
+| In `papergrader_admins` (or both groups) | admin |
+| In `papergrader_tas` only | TA |
+| LLDAP unreachable | 503 "temporarily unavailable" |
+| WAF rule matched | 403 from Caddy before anything else sees the request |
+
+Logging out goes to Tinyauth (`LOGOUT_URL`); the app keeps no session of its own in this mode.
+
+---
+
+## 10. People and roles
+
+Accounts live in LLDAP. The app's `users` table is only a cache that papers, grades and assignments point at.
+
+```mermaid
+flowchart TD
+    A["Admin opens LLDAP<br/>https://lldap.DOMAIN:5904 as admin"] --> B{"What?"}
+    B -- "new person" --> C["Create user: id, email, name, password"]
+    C --> D["Add to papergrader_tas or papergrader_admins"]
+    B -- "change role" --> E["Move between the two groups"]
+    B -- "remove access" --> F["Remove from both groups, or delete the user"]
+    B -- "name / email / password" --> G["Edit the user (the id can't change)"]
+
+    D --> S["App: within ~30 s the Admin page and TA pickers list them<br/>(listing users syncs the directory into the cache, even before they ever sign in)"]
+    E --> S2["App: role changes on their next request"]
+    F --> S3["App: next request is 403 not enrolled; cached row deactivated;<br/>papers, grades and review history stay"]
+    G --> S4["App: name follows; email changes keep the same account<br/>because the row is matched by LDAP uid first"]
+
+    S --> P["Admin assigns them papers (import CSV ta_emails, Papers tab bulk assign)"]
+    P --> T["Person signs in: row is created or matched, they see My queue"]
+```
+
+---
+
+## 11. Moving users from an older install (manual)
+
+Installs made before single sign-on have their own users. Nothing is migrated automatically; you run it when ready.
+
+```mermaid
+flowchart TD
+    U["./run.sh up on an old .env"] --> M["No AUTH_MODE: switch to sso,<br/>generate gateway secrets, start the gateway<br/>(users untouched)"]
+    M --> Q{"Ready to move the users?"}
+    Q -- "later / never" --> N["Only the built-in LLDAP admin can sign in<br/>(it becomes an app admin)"]
+    Q -- "yes" --> R["./run.sh migrate"]
+    R --> R1["export: the api image prints active users as JSON lines<br/>run.sh writes ldap-bootstrap/users.jsonl on the host"]
+    R1 --> R2["start LLDAP, wait until healthy"]
+    R2 --> R3["lldap-import (one-shot) creates each user<br/>in papergrader_admins or papergrader_tas, no password"]
+    R3 --> R4["Admin sets passwords in LLDAP<br/>or whitelists Google sign-in"]
+    R4 --> R5["First sign-in: matched by email to the old row<br/>-> same papers, grades and review history"]
+```
+
+Notes: it can be run again at any time (existing LDAP users are updated, not duplicated); a user whose email equals `BOOTSTRAP_ADMIN_EMAIL` is
+skipped because the built-in `admin` already carries it; `up`, `restart` and resets never run it; inactive users are not exported.

@@ -43,8 +43,26 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
     job_poll_seconds: float = 2.0
 
+    # "sso": a gateway (Caddy + WAF + Tinyauth) authenticates people and passes Remote-Email; the app looks them up in LDAP,
+    # takes role from group membership and keeps the users table only as a cache. "local": password / Google sign-in.
+    auth_mode: str = Field("sso", pattern="^(sso|local)$")
+    ldap_url: str = "ldap://lldap:3890"
+    ldap_base_dn: str = "dc=example,dc=com"
+    ldap_bind_dn: str = ""  # a read-only account, e.g. uid=tinyauth_observer,ou=people,<base dn>
+    ldap_bind_password: str = ""
+    ldap_people_ou: str = "ou=people"
+    ldap_groups_ou: str = "ou=groups"
+    ldap_admin_group: str = "papergrader_admins"
+    ldap_ta_group: str = "papergrader_tas"
+    ldap_cache_seconds: int = 30
+
     bootstrap_admin_email: str = ""
     bootstrap_admin_password: str = ""
+
+
+    @property
+    def sso(self) -> bool:
+        return self.auth_mode == "sso"
 
 
 @lru_cache

@@ -9,6 +9,8 @@ The database is wiped between tests, so point it at a throwaway database.
 """
 
 import os
+
+os.environ.setdefault("AUTH_MODE", "local")  # these tests are about the database, not sign-in
 import tempfile
 
 import pytest

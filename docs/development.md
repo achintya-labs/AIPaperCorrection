@@ -39,7 +39,7 @@ the requirements change; it is idempotent. Python 3.12 is what the images use; n
 fixed to `papergrader` so containers and volumes are the same whichever way you start the stack:
 
 ```sh
-./scripts/compose.sh up --build -d
+./scripts/compose.sh up --build -d     # passes --profile from AUTH_MODE in .env (sso by default)
 ./scripts/compose.sh logs -f worker
 COMPOSE_RUNTIME=docker ./scripts/compose.sh up -d     # the same, with `docker compose`
 ```
@@ -50,7 +50,8 @@ COMPOSE_RUNTIME=docker ./scripts/compose.sh up -d     # the same, with `docker c
 
 | Suite | Where | Runs on | Time |
 |---|---|---|---|
-| API (auth, import, grading, review, deletion, runner, docs drift) | `api/tests` | SQLite, a stand-in `claude` executable | ~8 s |
+| API (auth, import, grading, review, deletion, runner, docs drift) | `api/tests` | SQLite, a stand-in `claude` executable; `AUTH_MODE=local` (set in `tests/conftest.py`) | ~8 s |
+| Single sign-on (`tests/test_sso.py`: `Remote-Email` -> LDAP -> cache row, roles from groups, not enrolled, 409s, directory listing, import of never-signed-in TAs, the LDAP client against an in-memory server, the user export) | `api/tests` | a fake directory and ldap3's mock server | ~1 s |
 | Web unit tests (table search, cross-site request check, import button state, login errors) | `web/src/lib/*.test.ts` | Node's built-in runner | <1 s |
 | Type check and build | `web/` | `astro sync` (generates the `astro:*` types), `tsc`, `astro build` | ~10 s |
 | SQLite engine used by the tests (`tests/test_sqlite_mode.py`: migrations on a file, pragmas, racing claims) | `api/tests` | a temporary SQLite file | ~2 s |
@@ -95,8 +96,19 @@ unanchored `storage/` also hides the `api/app/storage` Python package, which pas
 | **API tests** | `pytest` on Python 3.12, and `docs/openapi.json` matches the code |
 | **Postgres tests and migrations** | Postgres 16 service: `alembic upgrade head` on an empty database, `alembic check`, then `tests_pg` |
 | **Web** | `npm ci`, unit tests, `astro sync`, type check, build |
-| **Compose and workflows** | `docker compose config` parses with local and with published images; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
-| **Image builds** (pull requests only) | Builds the `api`, `web` and `claude` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
+| **Compose and workflows** | `docker compose config` parses with both profiles (`sso`, `local`) and with published images; the sso profile publishes **exactly one** host port; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
+| **Image builds** (pull requests only) | Builds the `api`, `web`, `claude` and `gateway` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
+
+Not covered by CI: the gateway itself (Caddy/Coraza rules, Tinyauth, LLDAP, the self-signed certificate) needs real containers. After changing
+`gateway/Caddyfile`, `docker-compose.yml` or `run.sh`, start the stack (`./run.sh up`) and walk through the checks in
+[how-it-runs.md](how-it-runs.md#first-run-checklist); the sign-in flow is diagrammed in [workflows.md](workflows.md#9-signing-in-with-the-gateway-sso).
+
+### Compose profiles and the two sign-in modes
+
+`docker-compose.yml` puts services behind profiles: `sso` (`caddy`, `tinyauth`, `lldap`, `lldap-db-init`, `lldap-bootstrap`), `local` (the nginx
+`proxy`) and `migrate` (`lldap-import`, run only by `./run.sh migrate`). `run.sh` and `scripts/compose.sh` add `--profile $AUTH_MODE`; a plain
+`podman-compose` call without a profile starts only `db`, `claude`, `api`, `worker` and `web`. For development without the gateway use
+`AUTH_MODE=local` (`./run.sh --auth-mode local`, or the uvicorn recipe in [how-it-runs.md](how-it-runs.md#local-development-without-containers)).
 
 ## Publishing images
 
@@ -108,6 +120,7 @@ and pushes `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
 | `ghcr.io/<owner>/<repo>/api` | `api/Dockerfile` | Also run as the **worker** (same image, different command) |
 | `ghcr.io/<owner>/<repo>/web` | `web/Dockerfile` | Hostnames are configured at runtime (`ALLOWED_HOSTS`), nothing is baked in |
 | `ghcr.io/<owner>/<repo>/claude` | `claude/Dockerfile` | Contains the Claude Code CLI, installed unpinned |
+| `ghcr.io/<owner>/<repo>/gateway` | `gateway/Dockerfile` | Caddy with the Coraza WAF module and the Caddyfile (sso front door) |
 
 Publishing happens **only when you push a tag that starts with `v`**. Nothing is published from branches or pull requests.
 
@@ -130,14 +143,16 @@ Dockerfiles stay in the repository: only CI uses them. A server never builds any
 
 ```sh
 tar xzf papergrader-v1.0.0.tar.gz && cd papergrader-v1.0.0
-./run.sh --host grader.example.edu --admin-email me@example.edu   # first run: writes .env, makes a certificate, pulls, starts
-./run.sh login                                                    # sign Claude in once
+./run.sh --domain lan.internal --admin-email me@example.edu   # first run: writes .env and the gateway secrets, makes the certificate, pulls, starts
+./run.sh login                                               # sign Claude in once
+# then: add <DOMAIN>, auth.<DOMAIN> and lldap.<DOMAIN> to /etc/hosts, open https://<DOMAIN>:5904, sign in as admin (LLDAP_ADMIN_PASSWORD in .env)
 ```
 
-`run.sh` needs only Podman (it installs `podman-compose` into `./.venv` if missing). It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and the
-first admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and never overwrites an
-existing `.env` or certificate. Other commands: `up`, `down`, `restart`, `pull`, `pullup` (down, pull, up: the way to update to the newest release),
-`status`, `logs [service]`, `login`. In a git checkout (it has `./api`) it builds the images locally instead.
+`run.sh` needs only Podman (it installs `podman-compose` into `./.venv` if missing). It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD`, the
+LLDAP and Tinyauth secrets and the LDAP admin password (printed once), sets `AUTH_MODE`, `DOMAIN`, `HTTPS_PORT`, `COOKIE_SECURE`, `ALLOWED_HOSTS` and
+`PUBLIC_BASE_URL`, makes the self-signed gateway certificate in `gateway/tls/`, and never overwrites an existing `.env`. The release bundle
+carries `docker-compose.yml` pointing at the published `api`, `web`, `claude` and `gateway` images. Other commands: `up`, `down`, `restart`, `pull`, `pullup` (down, pull, up: the way to update to the newest release),
+`status`, `logs [service]`, `login`, `migrate` (manual: copy old users into LDAP). In a git checkout (it has `./api`) it builds the images locally instead.
 
 ### Running the published images
 

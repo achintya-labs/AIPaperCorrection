@@ -39,6 +39,7 @@ jobs:
           - { image: api, context: ./api, file: ./api/Dockerfile }
           - { image: web, context: ./web, file: ./web/Dockerfile }
           - { image: claude, context: ., file: ./claude/Dockerfile }
+          - { image: gateway, context: ., file: ./gateway/Dockerfile }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

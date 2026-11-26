@@ -58,6 +58,9 @@ class User(Base):
     # Bumped whenever the password changes; session tokens carry the value they were issued under,
     # so a password change signs out every other session.
     token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # SSO mode: the directory (LDAP) user this row mirrors. The row is then only a cache that grades, assignments and
+    # review history point at; email, name, role and active follow the directory.
+    ldap_uid: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
 
 class Exam(Base):

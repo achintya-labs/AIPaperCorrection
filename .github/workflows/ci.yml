@@ -102,9 +102,14 @@ jobs:
         run: |
           cp .env.example .env
           sed -i 's/^CLAUDE_RUNNER_TOKEN=$/CLAUDE_RUNNER_TOKEN=ci-token/' .env
-          docker compose config -q
+          # Both modes: the sso gateway services and the local nginx proxy sit behind compose profiles.
+          docker compose --profile sso --profile local config -q
+          docker compose --profile sso config --services | grep -qx caddy
+          docker compose --profile local config --services | grep -qx proxy
+          # sso publishes exactly one host port (the gateway); the app, api and db publish none.
+          [ "$(docker compose --profile sso config | grep -c 'published:')" = 1 ]
           PAPERGRADER_REGISTRY=ghcr.io/example/repo PAPERGRADER_TAG=1.2.3 \
-            docker compose config | grep -q 'image: ghcr.io/example/repo/api:1.2.3'
+            docker compose --profile sso config | grep -q 'image: ghcr.io/example/repo/api:1.2.3'
       - name: Shell scripts parse
         run: for f in run.sh scripts/*.sh; do sh -n "$f"; done
       - name: Lint the workflows
@@ -122,6 +127,7 @@ jobs:
           - { image: api, context: ./api, file: ./api/Dockerfile }
           - { image: web, context: ./web, file: ./web/Dockerfile }
           - { image: claude, context: ., file: ./claude/Dockerfile }
+          - { image: gateway, context: ., file: ./gateway/Dockerfile }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

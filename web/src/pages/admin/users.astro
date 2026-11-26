@@ -7,6 +7,6 @@ import ModelUsage from "../../components/ModelUsage";
   <h1>Admin</h1>
   <div class="admin-sections">
     <ModelUsage client:load />
-    <Users client:load />
+    <Users sso={(process.env.AUTH_MODE ?? "sso") !== "local"} ldapAdminUrl={process.env.LDAP_ADMIN_URL ?? ""} client:load />
   </div>
 </Layout>

@@ -5,18 +5,18 @@ Claude Code CLI) transcribes each page, finds which questions are on it, grades 
 and reports a confidence; TAs approve or edit. Claude's output is kept untouched alongside the TA's decision.
 
 ```
-browser ─► web (Astro) ─► api (FastAPI) ─► db (Postgres)
-                              │
-          worker ─────────────┘──► claude container ─► Claude Code CLI ─► Anthropic
+browser ─► caddy (WAF) ─► tinyauth (login) ─► web (Astro) ─► api (FastAPI) ─► db (Postgres)
+                              │                                   │              ▲
+                         lldap (users, groups)         worker ────┘──► claude container ─► Claude Code CLI ─► Anthropic
 ```
 
 ## Read in this order
 
 | Document | Read it to… |
 |---|---|
-| [how-it-runs.md](how-it-runs.md) | start the system, configure it, log Claude in, operate, back up, troubleshoot |
+| [how-it-runs.md](how-it-runs.md) | start the system, single sign-on and LDAP users, configure it, log Claude in, operate, back up, troubleshoot |
 | [architecture.md](architecture.md) | understand the components, data model, security boundaries and why things are built this way |
-| [workflows.md](workflows.md) | see the flowcharts: lifecycle, submission states, import, grading pipeline, review conflicts, auth path, login |
+| [workflows.md](workflows.md) | see the flowcharts: lifecycle, submission states, import, grading pipeline, review conflicts, auth path, Claude login, restarts, gateway sign-in, people and roles, user migration |
 | [api.md](api.md) | call the API: conventions, every endpoint, request/response shapes, error cases, curl examples |
 | [openapi.json](openapi.json) | machine-readable API spec (generated) |
 | [development.md](development.md) | set up the repo-local tooling, run tests, understand the commit gate, CI and how images are published |

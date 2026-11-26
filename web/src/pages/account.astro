@@ -2,4 +2,4 @@
 import Layout from "../layouts/Layout.astro";
 import Account from "../components/Account";
 ---
-<Layout title="Account"><Account client:load /></Layout>
+<Layout title="Account"><Account sso={(process.env.AUTH_MODE ?? "sso") !== "local"} ldapAdminUrl={process.env.LDAP_ADMIN_URL ?? ""} client:load /></Layout>

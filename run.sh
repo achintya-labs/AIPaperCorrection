@@ -7,12 +7,22 @@
 #   ./run.sh pull      download the latest images:                podman-compose pull
 #   ./run.sh pullup    down, pull, up: update to the latest release
 #   ./run.sh status | logs [service] | login | env
+#   ./run.sh migrate   sso, MANUAL and never part of `up`: copy the app's existing users into LLDAP (no passwords).
+#                            export-users does just the export (writes ldap-bootstrap/users.jsonl).
+#
+# Sign-in (AUTH_MODE in .env, default sso):
+#   sso    a gateway (Caddy + Coraza WAF + Tinyauth, users in LLDAP on Postgres) signs people in and is the ONLY thing
+#          published on the network: https://<DOMAIN>:<HTTPS_PORT> (default port 5904). Roles come from LDAP groups.
+#   local  the app's own password / Google sign-in behind the nginx HTTPS proxy (development, break-glass).
 #
 # First run (all options are optional and are stored in .env, so later runs need none of them):
-#   ./run.sh --host grader.example.edu --admin-email me@example.edu
-#   --host H                 name or IP people will browse to (repeatable)
+#   ./run.sh --domain lan.internal --admin-email me@example.edu                  (sso)
+#   ./run.sh --auth-mode local --host grader.example.edu --admin-email me@...    (local)
+#   --domain D               sso: base domain; the app is at D itself, the login portal auth.D, user admin lldap.D
+#   --auth-mode M            sso (default) or local
+#   --host H                 local: name or IP people will browse to (repeatable)
 #   --admin-email E          first admin's email
-#   --https-port P           HTTPS port (default 8443; rootless can't bind below 1024)
+#   --https-port P           HTTPS port (sso default 5904, local default 8443; rootless can't bind below 1024)
 #
 # On up/restart of a release it also asks GitHub (3 s timeout, silent on any failure) for the newest release and tells
 # you if the image you have is older; update with ./run.sh pullup.
@@ -21,7 +31,8 @@
 #   1. checks that podman is installed and that your user has subuid/subgid ranges (rootless needs them);
 #   2. uses podman-compose if it is already installed; otherwise looks for Python 3.14 (warns and carries on with
 #      python3 if it is missing), makes ./.venv and installs podman-compose into it;
-#   3. uses ./.env if it exists, otherwise creates it with fresh random secrets (and a self-signed certificate).
+#   3. uses ./.env if it exists, otherwise creates it with fresh random secrets (local mode also a self-signed certificate);
+#   Moving the users of an older install into LDAP is never automatic: run ./run.sh migrate yourself (docs/how-it-runs.md).
 # Re-running never overwrites an existing .env or certificate. To start over, delete them.
 #
 # A release bundle has no source (no ./api), and its docker-compose.yml points at the published "latest" images, so
@@ -41,13 +52,15 @@ rand_hex() {
 }
 
 # ---------------------------------------------------------------- options
-HOSTS=""; ADMIN_EMAIL=""; HTTPS_PORT_ARG=""
+HOSTS=""; ADMIN_EMAIL=""; HTTPS_PORT_ARG=""; DOMAIN_ARG=""; AUTHMODE_ARG=""
 CMD=""; REST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) [ $# -ge 2 ] || die "--host needs a value"; HOSTS="$HOSTS $2"; shift 2 ;;
     --admin-email) [ $# -ge 2 ] || die "--admin-email needs a value"; ADMIN_EMAIL=$2; shift 2 ;;
     --https-port) [ $# -ge 2 ] || die "--https-port needs a value"; HTTPS_PORT_ARG=$2; shift 2 ;;
+    --domain) [ $# -ge 2 ] || die "--domain needs a value"; DOMAIN_ARG=$2; shift 2 ;;
+    --auth-mode) [ $# -ge 2 ] || die "--auth-mode needs sso or local"; AUTHMODE_ARG=$2; shift 2 ;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1 (see ./run.sh --help)" ;;
     *) if [ -z "$CMD" ]; then CMD=$1; else REST="$REST $1"; fi; shift ;;
@@ -55,9 +68,10 @@ while [ $# -gt 0 ]; do
 done
 CMD=${CMD:-up}
 case "$CMD" in
-  up|down|restart|pull|pullup|status|logs|login|env) ;;
-  *) die "unknown command '$CMD' (up, down, restart, pull, pullup, status, logs, login, env)" ;;
+  up|down|restart|pull|pullup|status|logs|login|env|export-users|migrate) ;;
+  *) die "unknown command '$CMD' (up, down, restart, pull, pullup, status, logs, login, env, export-users, migrate)" ;;
 esac
+case "$AUTHMODE_ARG" in ""|sso|local) ;; *) die "--auth-mode must be sso or local" ;; esac
 
 # ---------------------------------------------------------------- 1. podman, subuid/subgid
 command -v podman >/dev/null 2>&1 || die "podman is not installed. Install it first:
@@ -98,7 +112,9 @@ else
   ./.venv/bin/pip install --quiet --disable-pip-version-check podman-compose || die "could not install podman-compose into ./.venv (no network?)"
   PC=$PWD/.venv/bin/podman-compose
 fi
-compose() { "$PC" -p papergrader "$@"; }
+AUTH_MODE=sso  # set for real once .env exists (below)
+compose() { "$PC" -p papergrader --profile "$AUTH_MODE" "$@"; }
+compose_all() { "$PC" -p papergrader --profile sso --profile local "$@"; }  # down: remove whichever mode was running
 
 # A release bundle has no source tree: its compose file names the published "latest" images, which are pulled.
 PUBLISHED=0
@@ -110,32 +126,68 @@ setenv() { # setenv KEY VALUE  (replace the line, or append)
 '*) die "value for $1 contains a character that is not allowed" ;; esac
   if grep -q "^$1=" .env 2>/dev/null; then
     tmp=$(mktemp); sed "s|^$1=.*|$1=$2|" .env > "$tmp" && cat "$tmp" > .env; rm -f "$tmp"
-  else printf '%s=%s\n' "$1" "$2" >> .env; fi
+  else
+    # An .env whose last line has no newline (older copies of .env.example) would get the new key glued onto it.
+    [ ! -s .env ] || [ -z "$(tail -c1 .env)" ] || echo >> .env
+    printf '%s=%s\n' "$1" "$2" >> .env
+  fi
 }
 env_get() { sed -n "s/^$1=//p" .env 2>/dev/null | head -1; }
 
-CREATED_ENV=0
+setenv_missing() { [ -n "$(env_get "$1")" ] || setenv "$1" "$2"; }
+
+# The values sso mode needs. On a new .env everything is generated; on an existing one only what is missing is added,
+# so an install made before sso existed upgrades in place (its secrets, users and data are untouched).
+ensure_sso_env() { # ensure_sso_env DOMAIN PORT
+  domain=$1; port=$2
+  setenv DOMAIN "$domain"
+  setenv_missing LLDAP_JWT_SECRET "$(rand_hex 32)"
+  setenv_missing LLDAP_KEY_SEED "$(rand_hex 32)"
+  setenv_missing LLDAP_DB_PASSWORD "$(rand_hex 16)"
+  setenv_missing LDAP_OBSERVER_PASSWORD "$(rand_hex 16)"
+  if [ -z "$(env_get LLDAP_ADMIN_PASSWORD)" ]; then
+    setenv LLDAP_ADMIN_PASSWORD "$(rand_hex 9)"; NEW_LLDAP_ADMIN=1
+  fi
+  d=$(env_get DOMAIN)
+  setenv HTTPS_PORT "$port"
+  setenv COOKIE_SECURE true
+  setenv PUBLIC_BASE_URL "https://$d:$port"
+  setenv_missing ALLOWED_HOSTS "localhost,127.0.0.1"
+  case ",$(env_get ALLOWED_HOSTS)," in *",$d,"*) ;; *) setenv ALLOWED_HOSTS "$(env_get ALLOWED_HOSTS),$d" ;; esac
+  setenv LOGOUT_URL "https://auth.$d:$port/logout"
+  setenv LDAP_ADMIN_URL "https://lldap.$d:$port"
+}
+
+CREATED_ENV=0; NEW_LLDAP_ADMIN=0
 make_env() {
   [ -f .env.example ] || die ".env.example is missing next to run.sh"
-  : "${HOSTS:=localhost 127.0.0.1}"
-  first=$(printf '%s' "$HOSTS" | awk '{print $1}')
-  port=${HTTPS_PORT_ARG:-8443}
+  mode=${AUTHMODE_ARG:-sso}
   admin_email=${ADMIN_EMAIL:-admin@example.com}
-  admin_pw=$(rand_hex 9)
   umask 077
   cp .env.example .env
   chmod 600 .env
+  setenv AUTH_MODE "$mode"
   setenv JWT_SECRET "$(rand_hex 32)"
   setenv CLAUDE_RUNNER_TOKEN "$(rand_hex 32)"
   setenv DB_PASSWORD "$(rand_hex 16)"
   setenv BOOTSTRAP_ADMIN_EMAIL "$admin_email"
-  setenv BOOTSTRAP_ADMIN_PASSWORD "$admin_pw"
-  setenv ALLOWED_HOSTS "localhost,127.0.0.1$(for h in $HOSTS; do case $h in localhost|127.0.0.1) ;; *) printf ',%s' "$h" ;; esac; done)"
-  setenv HTTPS_PORT "$port"
-  setenv COOKIE_SECURE true
-  setenv PUBLIC_BASE_URL "https://$first:$port"
   echo "Created .env with new random secrets (mode 600)."
-  echo "  First admin:  $admin_email   password: $admin_pw   <- shown once; change it after signing in"
+  if [ "$mode" = sso ]; then
+    setenv BOOTSTRAP_ADMIN_PASSWORD ""
+    ensure_sso_env "${DOMAIN_ARG:-lan.internal}" "${HTTPS_PORT_ARG:-5904}"
+    echo "  First admin:  user 'admin' ($admin_email)   password: $(env_get LLDAP_ADMIN_PASSWORD)   <- also in .env as LLDAP_ADMIN_PASSWORD"
+  else
+    : "${HOSTS:=localhost 127.0.0.1}"
+    first=$(printf '%s' "$HOSTS" | awk '{print $1}')
+    port=${HTTPS_PORT_ARG:-8443}
+    admin_pw=$(rand_hex 9)
+    setenv BOOTSTRAP_ADMIN_PASSWORD "$admin_pw"
+    setenv ALLOWED_HOSTS "localhost,127.0.0.1$(for h in $HOSTS; do case $h in localhost|127.0.0.1) ;; *) printf ',%s' "$h" ;; esac; done)"
+    setenv HTTPS_PORT "$port"
+    setenv COOKIE_SECURE true
+    setenv PUBLIC_BASE_URL "https://$first:$port"
+    echo "  First admin:  $admin_email   password: $admin_pw   <- shown once; change it after signing in"
+  fi
   CREATED_ENV=1
 }
 
@@ -148,6 +200,29 @@ make_cert() {
 }
 
 [ -f .env ] || make_env
+
+# Which sign-in mode runs. An .env from before sso existed has no AUTH_MODE: it is upgraded to sso (the default) in place.
+if [ -n "$AUTHMODE_ARG" ] && [ "$(env_get AUTH_MODE)" != "$AUTHMODE_ARG" ] && [ "$CREATED_ENV" = 0 ]; then
+  setenv AUTH_MODE "$AUTHMODE_ARG"; echo "AUTH_MODE is now $AUTHMODE_ARG."
+elif [ -z "$(env_get AUTH_MODE)" ]; then
+  setenv AUTH_MODE sso; echo "No AUTH_MODE in .env: switching this install to single sign-on (set AUTH_MODE=local to keep passwords)."
+fi
+AUTH_MODE=$(env_get AUTH_MODE)
+case "$AUTH_MODE" in sso|local) ;; *) die "AUTH_MODE in .env must be sso or local (found '$AUTH_MODE')" ;; esac
+if [ "$AUTH_MODE" = sso ] && [ "$CREATED_ENV" = 0 ] && { [ -z "$(env_get LLDAP_JWT_SECRET)" ] || [ -n "$DOMAIN_ARG$HTTPS_PORT_ARG" ]; }; then
+  # Upgrading an older install (no gateway secrets yet) or an explicit --domain/--https-port: (re)write the sso settings.
+  if [ -z "$(env_get LLDAP_JWT_SECRET)" ]; then d=${DOMAIN_ARG:-lan.internal}; p=${HTTPS_PORT_ARG:-5904}
+  else d=${DOMAIN_ARG:-$(env_get DOMAIN)}; p=${HTTPS_PORT_ARG:-$(env_get HTTPS_PORT)}; fi
+  ensure_sso_env "$d" "$p"
+  [ "$NEW_LLDAP_ADMIN" = 0 ] || echo "  LDAP admin:  user 'admin'   password: $(env_get LLDAP_ADMIN_PASSWORD)   <- also in .env as LLDAP_ADMIN_PASSWORD"
+fi
+
+# The app used to be served at app.<DOMAIN>; it now lives at <DOMAIN> itself. Bring an older sso .env along (idempotent).
+if [ "$AUTH_MODE" = sso ] && [ "$CREATED_ENV" = 0 ] && [ -n "$(env_get DOMAIN)" ]; then
+  d=$(env_get DOMAIN); p=$(env_get HTTPS_PORT)
+  case ",$(env_get ALLOWED_HOSTS)," in *",$d,"*) ;; *) setenv ALLOWED_HOSTS "$(env_get ALLOWED_HOSTS),$d" ;; esac
+  [ "$(env_get PUBLIC_BASE_URL)" != "https://app.$d:$p" ] || setenv PUBLIC_BASE_URL "https://$d:$p"
+fi
 
 # ---------------------------------------------------------------- commands
 need_published() { [ "$PUBLISHED" = 1 ] || die "pull needs a release bundle (this is a git checkout). In a git checkout the images are built locally."; }
@@ -172,27 +247,117 @@ check_update() {
   echo "A new version is available: $latest (you have $cur). Update with:  ./run.sh pullup"
   echo
 }
+# MANUAL (./run.sh export-users, or migrate which also imports): print the existing users as LLDAP bootstrap documents into
+# ldap-bootstrap/users.jsonl. Nothing here runs on `up`, so a reset never re-triggers a migration. The file is written HERE, on
+# the host, from the container's stdout: a container can't write into a bind-mounted host folder under rootless Podman (the api
+# runs as uid 1000, the folder belongs to another uid). Users keep their papers and grades: the app matches them by email on
+# their first sign-in.
+export_users() {
+  echo "Exporting the app's existing users ..."
+  mkdir -p ldap-bootstrap && chmod 755 ldap-bootstrap
+  compose up -d db >/dev/null 2>&1 || { warn "could not start the database to export users"; return 1; }
+  i=0; until compose exec -T db pg_isready -U grader >/dev/null 2>&1; do
+    i=$((i+1)); [ "$i" -lt 30 ] || { warn "the database is not ready"; return 1; }; sleep 1
+  done
+  out=$(mktemp)
+  if compose run --rm -T --no-deps api python -m app.export_ldap_users > "$out"; then
+    grep '^{' "$out" > ldap-bootstrap/users.jsonl || true  # keep only the JSON lines; an empty file means "nobody to export"
+    chmod 644 ldap-bootstrap/users.jsonl
+    echo "  $(wc -l < ldap-bootstrap/users.jsonl | tr -d ' ') user(s) written to ldap-bootstrap/users.jsonl"
+  else
+    warn "user export failed (an api image older than this run.sh also causes this: git checkout -> ./run.sh up rebuilds, release bundle -> ./run.sh pullup)"
+    rm -f "$out"
+    return 1
+  fi
+  rm -f "$out"
+}
+
+# MANUAL: export the existing users, then import them into LLDAP (without passwords, in the group matching their old role). Needs
+# the sso stack up so LLDAP is running; people then get a password in the LLDAP UI (or use Google sign-in). Safe to repeat.
+migrate_users() {
+  [ "$AUTH_MODE" = sso ] || die "migrate is for AUTH_MODE=sso"
+  export_users || die "export failed; nothing was imported"
+  [ -s ldap-bootstrap/users.jsonl ] || { echo "No active users to migrate."; return 0; }
+  echo "Importing them into LLDAP ..."
+  compose up -d lldap >/dev/null 2>&1 || die "could not start LLDAP (is the stack up? try ./run.sh up first)"
+  i=0; until compose exec -T lldap /app/lldap healthcheck --config-file /data/lldap_config.toml >/dev/null 2>&1; do
+    i=$((i+1)); [ "$i" -lt 60 ] || die "LLDAP did not become ready"; sleep 1
+  done
+  "$PC" -p papergrader --profile sso --profile migrate run --rm -T --no-deps lldap-import || die "the LLDAP import failed (output above)"
+  echo
+  echo "Done. Set each person's password in LLDAP (https://lldap.$(env_get DOMAIN):$(env_get HTTPS_PORT), user 'admin'): Users, the person,"
+  echo "Modify password. Or use Google sign-in (OAUTH_WHITELIST). On their first sign-in they keep their papers and grades."
+}
+
+# In a git checkout `up` alone would reuse whatever image was built last time (podman-compose only builds a MISSING image),
+# so new code (and the user export below, which runs inside the api image) would never take effect. Layer caching makes
+# this fast when nothing changed. A release bundle pulls published images instead (./run.sh pullup updates them).
+build_images() {
+  [ "$PUBLISHED" = 0 ] || return 0
+  echo "Building images (cached layers are reused; the first time takes a few minutes) ..."
+  compose build || die "image build failed (see the output above)"
+}
+
+# sso: a SELF-SIGNED certificate for <DOMAIN>, auth.<DOMAIN> and lldap.<DOMAIN>, handed to Caddy through gateway/tls/tls.caddy. (Caddy's own CA
+# would need its root trusted in every browser, and a browser that has met another "Caddy Local Authority" before rejects the
+# new one with "certificate has an invalid signature".) To use a real certificate, replace the three files in gateway/tls/ and
+# delete gateway/tls/.domain so it is not regenerated. Regenerated automatically when DOMAIN changes.
+make_gateway_cert() {
+  d=$(env_get DOMAIN)
+  mkdir -p gateway/tls
+  if [ -f gateway/tls/wildcard.crt ] && [ -f gateway/tls/wildcard.key ] && [ -f gateway/tls/tls.caddy ] \
+     && { [ ! -f gateway/tls/.domain ] || [ "$(cat gateway/tls/.domain)" = "$d" ]; }; then return 0; fi
+  command -v openssl >/dev/null 2>&1 || die "openssl is needed once to make the self-signed certificate. Install it, or put your own certificate in gateway/tls/ (wildcard.crt, wildcard.key, tls.caddy)."
+  ( umask 077
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+      -keyout gateway/tls/wildcard.key -out gateway/tls/wildcard.crt \
+      -subj "/CN=$d" -addext "subjectAltName=DNS:$d,DNS:auth.$d,DNS:lldap.$d,DNS:*.$d" 2>/dev/null ) \
+    || die "could not create the self-signed certificate for $d"
+  chmod 644 gateway/tls/wildcard.crt
+  chmod 600 gateway/tls/wildcard.key  # Caddy runs as the container's root, which is this user under rootless Podman
+  printf 'tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key\n' > gateway/tls/tls.caddy
+  printf '%s\n' "$d" > gateway/tls/.domain
+  echo "Wrote a self-signed certificate for $d, auth.$d and lldap.$d (gateway/tls/, valid 365 days)."
+}
+
 do_up() {
   check_update
-  make_cert
+  build_images
+  if [ "$AUTH_MODE" = sso ]; then
+    mkdir -p gateway/tls  # bind-mount source must exist
+    make_gateway_cert
+  else
+    make_cert
+  fi
   compose up -d --force-recreate
   echo
-  echo "Running. Open  $(env_get PUBLIC_BASE_URL)   (self-signed certificate: the browser will warn once)"
+  if [ "$AUTH_MODE" = sso ]; then
+    d=$(env_get DOMAIN); p=$(env_get HTTPS_PORT)
+    echo "Running. Open  https://$d:$p   (self-signed certificate: the browser warns once for each of $d, auth.$d and lldap.$d;"
+    echo "accept it on auth.$d too, because signing in redirects there)"
+    echo "On every machine that browses to it, /etc/hosts needs:  <this machine's IP>  $d auth.$d lldap.$d"
+    echo "People are managed in LLDAP at https://lldap.$d:$p (user 'admin', password LLDAP_ADMIN_PASSWORD in .env);"
+    ag=$(env_get LDAP_ADMIN_GROUP); tg=$(env_get LDAP_TA_GROUP)
+    echo "put them in the group ${ag:-papergrader_admins} (admins) or ${tg:-papergrader_tas} (TAs) to give them access."
+  else
+    echo "Running. Open  $(env_get PUBLIC_BASE_URL)   (self-signed certificate: the browser will warn once)"
+  fi
   echo "Claude must be signed in once:  ./run.sh login"
-  [ "$CREATED_ENV" = 1 ] || echo "Sign in with the admin account from .env (BOOTSTRAP_ADMIN_EMAIL / _PASSWORD) if no users exist yet."
 }
 
 case "$CMD" in
   up) do_up ;;
-  down) compose down ;;
-  restart) compose down && do_up ;;
+  down) compose_all down ;;
+  restart) compose_all down && do_up ;;
   pull) need_published; compose pull ;;
-  pullup) need_published; compose down && compose pull && do_up ;;
+  pullup) need_published; compose_all down && compose pull && do_up ;;
+  export-users) [ "$AUTH_MODE" = sso ] || die "export-users is for AUTH_MODE=sso"; export_users ;;
+  migrate) migrate_users ;;
   status) compose ps ;;
   logs) # shellcheck disable=SC2086
         compose logs -f --tail 200 $REST ;;
   env) echo ".env is at $(pwd)/.env (mode $(stat -c %a .env 2>/dev/null || stat -f %Lp .env))"
-       echo "Admin email: $(env_get BOOTSTRAP_ADMIN_EMAIL)" ;;
+       echo "Sign-in mode: $AUTH_MODE   Admin email: $(env_get BOOTSTRAP_ADMIN_EMAIL)" ;;
   login) [ -x ./scripts/claude-login.sh ] || die "scripts/claude-login.sh is missing"
-         COMPOSE="$PC -p papergrader" ./scripts/claude-login.sh ;;
+         COMPOSE="$PC -p papergrader --profile $AUTH_MODE" ./scripts/claude-login.sh ;;
 esac
