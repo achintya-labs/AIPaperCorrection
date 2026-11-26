@@ -19,10 +19,23 @@ export default function ExamAdmin({ id }: { id: number }) {
   const [exam, setExam] = useState<Exam | null>(null);
   const [model, setModel] = useState("");
   const [tab, setTab] = useState<Tab>("rubric");
+  const [tabReady, setTabReady] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [name, setName] = useState("");
   const [nameSaved, setNameSaved] = useState(false);
+
+  // Keep the chosen tab across reloads (and in the URL): #papers, #import, ...
+  useEffect(() => {
+    const h = window.location.hash.slice(1);
+    const found = TABS.find(([k]) => k === h);
+    if (found) setTab(found[0]);
+    setTabReady(true);
+  }, []);
+  const pickTab = (t: Tab) => {
+    setTab(t);
+    window.history.replaceState(null, "", `#${t}`);
+  };
 
   useEffect(() => {
     api<Exam[]>("/exams")
@@ -75,13 +88,13 @@ export default function ExamAdmin({ id }: { id: number }) {
       {error && <Alert tone="bad">{error}</Alert>}
       <div className="tabs" role="tablist">
         {TABS.map(([key, label]) => (
-          <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
+          <button key={key} role="tab" aria-selected={tab === key} onClick={() => pickTab(key)}>{label}</button>
         ))}
       </div>
-      {tab === "rubric" && <RubricEditor examId={id} />}
-      {tab === "import" && <ImportWizard examId={id} />}
-      {tab === "papers" && <ExamSubmissions examId={id} />}
-      {tab === "advanced" && (
+      {tabReady && tab === "rubric" && <RubricEditor examId={id} />}
+      {tabReady && tab === "import" && <ImportWizard examId={id} />}
+      {tabReady && tab === "papers" && <ExamSubmissions examId={id} />}
+      {tabReady && tab === "advanced" && (
         <div className="stack">
           <div className="card row" style={{ alignItems: "flex-end" }}>
             <div className="grow" style={{ maxWidth: 360 }}>

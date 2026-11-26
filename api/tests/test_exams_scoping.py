@@ -190,3 +190,20 @@ def test_exam_name_cannot_be_blank(client):
     assert client.patch(f"/exams/{exam_id}", json={"name": "   "}).status_code == 422
     assert client.post("/exams", json={"name": ""}).status_code == 422
     assert client.get("/exams").json()[0]["name"] == "Midterm"
+
+
+def test_admin_edits_student_and_user_name(client):
+    exam_id = make_exam(client)
+    with TestSession() as s:
+        a, b = Student(external_id="r1", name="A"), Student(external_id="r2")
+        s.add_all([a, b])
+        s.commit()
+        aid, bid = a.id, b.id
+        ta_id = s.query(User).filter_by(email="ta@x.io").one().id
+    r = client.patch(f"/students/{aid}", json={"name": " Ann ", "external_id": "r9"})
+    assert r.status_code == 200 and r.json()["name"] == "Ann" and r.json()["external_id"] == "r9"
+    assert client.patch(f"/students/{bid}", json={"external_id": "r9"}).status_code == 409
+    assert client.patch(f"/students/{bid}", json={"external_id": " "}).status_code == 422
+    assert client.patch(f"/students/{bid}", json={}).status_code == 422
+    assert client.patch("/students/999", json={"name": "x"}).status_code == 404
+    assert client.patch(f"/auth/users/{ta_id}", json={"name": "Tia"}).json()["name"] == "Tia"

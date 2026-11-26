@@ -76,6 +76,7 @@ class UserAdminOut(UserOut):
 class UserUpdate(BaseModel):
     role: Role | None = None
     active: bool | None = None
+    name: str | None = None  # the email is the user's key and can't be changed
 
 
 class UserCreate(BaseModel):
@@ -293,10 +294,10 @@ def update_user(
     me: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Change a user's role and/or active flag. Takes effect immediately: the session cookie holds
+    """Change a user's role, active flag and/or name. Takes effect immediately: the session cookie holds
     only the user id, and role/active are read from the database on every request."""
-    if body.role is None and body.active is None:
-        raise HTTPException(422, "Provide role and/or active")
+    if body.role is None and body.active is None and body.name is None:
+        raise HTTPException(422, "Provide role, active and/or name")
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404, "User not found")
@@ -310,6 +311,8 @@ def update_user(
         _guard_last_admin(db, user)
 
     user.role, user.active = new_role, new_active
+    if body.name is not None:
+        user.name = body.name.strip()
     db.commit()
     return _admin_out(db, [user])[0]
 

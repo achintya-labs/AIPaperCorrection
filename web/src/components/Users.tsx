@@ -24,6 +24,7 @@ export default function Users() {
   const [ok, setOk] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
+  const [editName, setEditName] = useState<{ id: number; value: string } | null>(null);
   const [resetting, setResetting] = useState<{ id: number; value: string; generated: boolean } | null>(null);
 
   const load = () => api<UserAdmin[]>("/auth/users").then(setUsers).catch((e) => setError(errMsg(e)));
@@ -50,13 +51,19 @@ export default function Users() {
     } catch (err) { setError(errMsg(err)); }
   }
 
-  async function patch(u: UserAdmin, body: { role?: Role; active?: boolean }, done: string) {
+  async function patch(u: UserAdmin, body: { role?: Role; active?: boolean; name?: string }, done: string) {
     setError(""); setOk(""); setBusy(u.id);
     try {
       await api(`/auth/users/${u.id}`, { method: "PATCH", json: body });
       setOk(done);
       await load();
     } catch (err) { setError(errMsg(err)); } finally { setBusy(null); }
+  }
+
+  async function saveName(u: UserAdmin) {
+    if (!editName) return;
+    await patch(u, { name: editName.value }, `Name for ${u.email} updated.`);
+    setEditName(null);
   }
 
   function changeRole(u: UserAdmin, role: Role) {
@@ -161,7 +168,21 @@ export default function Users() {
                     <td>
                       <strong>{u.email}</strong>{self && <span className="badge neutral" style={{ marginLeft: ".4rem" }}>you</span>}
                       {!u.has_password && <span className="badge neutral" style={{ marginLeft: ".4rem" }} title="No password set: can only sign in with Google">Google only</span>}
-                      {u.name && <div className="muted small">{u.name}</div>}
+                      {editName?.id === u.id ? (
+                        <div className="row" style={{ gap: ".4rem", marginTop: ".3rem", flexWrap: "nowrap" }}>
+                          <input aria-label={`Name for ${u.email}`} value={editName.value} autoFocus placeholder="Name"
+                            onChange={(e) => setEditName({ id: u.id, value: e.target.value })}
+                            onKeyDown={(e) => { if (e.key === "Enter") saveName(u); if (e.key === "Escape") setEditName(null); }} />
+                          <button className="primary btn-sm" disabled={busy === u.id} onClick={() => saveName(u)}>Save</button>
+                          <button className="btn-sm" onClick={() => setEditName(null)}>Cancel</button>
+                        </div>
+                      ) : (
+                        <div className="row" style={{ gap: ".4rem", flexWrap: "nowrap" }}>
+                          <span className="muted small">{u.name || "no name"}</span>
+                          <button className="icon-btn" aria-label={`Edit name of ${u.email}`} title="Edit name (the email can't be changed)"
+                            onClick={() => setEditName({ id: u.id, value: u.name })}>✎</button>
+                        </div>
+                      )}
                     </td>
                     <td>
                       <RoleSelect

@@ -110,6 +110,8 @@ def test_every_route_has_expected_auth_dependency(client):
         ("POST", "/submissions/{submission_id}/regrade"),
         ("POST", "/submissions/bulk/grade"),
         ("PUT", "/submissions/bulk/assignment"),
+        ("POST", "/submissions/bulk/delete"),
+        ("PATCH", "/students/{student_id}"),
         ("GET", "/grader/status"),
         ("GET", "/exams/{exam_id}/export.csv"),
         ("GET", "/exams/{exam_id}/export.zip"),

@@ -19,6 +19,11 @@ class StudentIn(BaseModel):
     name: str = ""
 
 
+class StudentPatch(BaseModel):
+    external_id: str | None = None  # roll number
+    name: str | None = None
+
+
 class StudentOut(StudentIn):
     id: int
 
@@ -42,6 +47,15 @@ class SubmissionOut(BaseModel):
 
 class AssignIn(BaseModel):
     ta_ids: list[int]
+
+
+class BulkDeleteIn(BaseModel):
+    submission_ids: list[int] = Field(min_length=1)
+    force: bool = False  # allow discarding TA-reviewed grades
+
+
+class BulkDeleteResult(BaseModel):
+    deleted: int
 
 
 class BulkAssignIn(BaseModel):
@@ -91,6 +105,28 @@ def upsert_students(body: list[StudentIn], db: Session = Depends(get_db)):
         out.append(s)
     db.commit()
     return out
+
+
+@router.patch("/students/{student_id}", response_model=StudentOut, dependencies=[Depends(require_admin)])
+def update_student(student_id: int, body: StudentPatch, db: Session = Depends(get_db)):
+    """Correct a student's roll number (external_id) and/or name."""
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+    if body.external_id is None and body.name is None:
+        raise HTTPException(422, "Provide external_id and/or name")
+    if body.external_id is not None:
+        roll = body.external_id.strip()
+        if not roll:
+            raise HTTPException(422, "Roll number can't be empty")
+        clash = db.scalar(select(Student.id).where(Student.external_id == roll, Student.id != student.id))
+        if clash is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, f"Another student already has the roll number {roll}")
+        student.external_id = roll
+    if body.name is not None:
+        student.name = body.name.strip()
+    db.commit()
+    return student
 
 
 @router.get("/students", response_model=list[StudentOut], dependencies=[Depends(require_admin)])
@@ -185,6 +221,32 @@ def assign_submission(
     sub.tas = list(tas)
     db.commit()
     return sub
+
+
+@router.post("/submissions/bulk/delete", response_model=BulkDeleteResult, dependencies=[Depends(require_admin)])
+def delete_selected(
+    body: BulkDeleteIn,
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+):
+    """Permanently delete several papers (see DELETE /submissions/{id}). All or nothing: if any is being graded, or
+    any holds TA-reviewed grades and force is false, nothing is deleted."""
+    ids = sorted(set(body.submission_ids))
+    found = set(db.scalars(select(Submission.id).where(Submission.id.in_(ids))))
+    if found != set(ids):
+        raise HTTPException(404, "Submission not found")
+    deletion.lock_for_delete(db, ids)
+    reviewed = deletion.reviewed_grade_count(db, ids)
+    if reviewed and not body.force:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"These {len(ids)} paper(s) hold {reviewed} TA-reviewed grade(s); deleting them discards that work. "
+            "Pass force=true to delete them anyway.",
+        )
+    keys = deletion.delete_submissions(db, ids)
+    db.commit()
+    deletion.purge_files(storage, keys)
+    return BulkDeleteResult(deleted=len(ids))
 
 
 @router.delete("/submissions/{submission_id}", status_code=204, dependencies=[Depends(require_admin)])

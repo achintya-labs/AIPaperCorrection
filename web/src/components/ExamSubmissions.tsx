@@ -15,6 +15,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<{ id: number; ids: Set<number> } | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [editStudent, setEditStudent] = useState<{ id: number; external_id: string; name: string } | null>(null);
   const [bulkTas, setBulkTas] = useState<number[]>([]);
   const [bulkMode, setBulkMode] = useState<"replace" | "add" | "remove">("add");
 
@@ -107,6 +108,36 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     } catch (e) { setError(errMsg(e)); }
   }
 
+  async function deleteSelected() {
+    setError(""); setInfo("");
+    const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
+    if (!confirm(`Permanently delete ${ids.length} selected paper${ids.length === 1 ? "" : "s"}?\n\nTheir page images, Claude's grades and any TA review work are deleted. The student records are kept. This can't be undone.`)) return;
+    const del = (force: boolean) =>
+      api<{ deleted: number }>(`/submissions/bulk/delete`, { method: "POST", json: { submission_ids: ids, force } });
+    try {
+      let r;
+      try { r = await del(false); }
+      catch (e) {
+        if (!(e instanceof ApiError && e.status === 409 && /force/.test(e.message))) throw e;
+        if (!confirm(`${e.message}\n\nDelete them anyway?`)) return;
+        r = await del(true);
+      }
+      setPicked(new Set());
+      setInfo(`Deleted ${r.deleted} paper${r.deleted === 1 ? "" : "s"}.`);
+      load();
+    } catch (e) { setError(errMsg(e)); }
+  }
+
+  async function saveStudent() {
+    if (!editStudent) return;
+    setError(""); setInfo("");
+    try {
+      await api(`/students/${editStudent.id}`, { method: "PATCH", json: { external_id: editStudent.external_id, name: editStudent.name } });
+      setEditStudent(null);
+      load();
+    } catch (e) { setError(errMsg(e)); }
+  }
+
   async function assignSelected() {
     setError(""); setInfo("");
     const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
@@ -134,6 +165,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         <div className="row">
           <button onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
           <a className="btn" href={`/api/exams/${examId}/export.csv`}>Export grades (CSV)</a>
+          <a className="btn" href={`/api/exams/${examId}/export.zip?ungraded=true`} title="Original scans of papers that are uploaded or failed">Export ungraded PDFs (ZIP)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip`}>Export PDFs (ZIP)</a>
         </div>
       </div>
@@ -144,18 +176,21 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
           shown={visible.length} total={subs.length} />
       )}
       {pickedCount > 0 && (
-        <div className="card row" style={{ position: "sticky", top: 0, zIndex: 20, flexWrap: "wrap", gap: ".6rem", alignItems: "center" }}>
+        <div className="card bulkbar">
           <strong>{pickedCount} selected</strong>
-          <button className="primary" onClick={gradeSelected}>Grade selected</button>
-          <span className="muted">|</span>
+          <button className="link" onClick={() => setPicked(new Set())}>Clear</button>
           <select value={bulkMode} onChange={(e) => setBulkMode(e.target.value as typeof bulkMode)} aria-label="How to apply TAs">
             <option value="add">Add TAs</option>
-            <option value="replace">Set TAs (replace)</option>
+            <option value="replace">Set TAs</option>
             <option value="remove">Remove TAs</option>
           </select>
-          <div style={{ minWidth: 220 }}><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
-          <button onClick={assignSelected} disabled={bulkTas.length === 0 && bulkMode !== "replace"}>Apply to selected</button>
-          <button className="link" onClick={() => setPicked(new Set())}>Clear selection</button>
+          <div className="bulk-ta"><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
+          <button onClick={assignSelected} disabled={bulkTas.length === 0 && bulkMode !== "replace"}>Apply</button>
+          <div className="bulk-right">
+            <a className="btn" href={`/api/exams/${examId}/export.zip?ids=${(subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id).join(",")}`}>Export PDFs (ZIP)</a>
+            <button className="primary" onClick={gradeSelected}>Grade selected</button>
+            <button className="danger" onClick={deleteSelected}>Delete selected</button>
+          </div>
         </div>
       )}
       <div className="card table-card has-menu">
@@ -174,7 +209,27 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
               {visible.map((s) => (
                 <tr key={s.id}>
                   <td><input type="checkbox" aria-label={`Select ${s.student.external_id}`} checked={picked.has(s.id)} onChange={(e) => toggle(s.id, e.target.checked)} /></td>
-                  <td><strong>{s.student.external_id}</strong>{s.student.name && <div className="small muted">{s.student.name}</div>}</td>
+                  <td className="wrap">
+                    {editStudent?.id === s.student.id ? (
+                      <div className="stack" style={{ gap: ".35rem", minWidth: 190 }}>
+                        <input aria-label="Roll number" placeholder="Roll number" value={editStudent.external_id}
+                          onChange={(e) => setEditStudent({ ...editStudent, external_id: e.target.value })} />
+                        <input aria-label="Name" placeholder="Name" value={editStudent.name}
+                          onChange={(e) => setEditStudent({ ...editStudent, name: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveStudent(); if (e.key === "Escape") setEditStudent(null); }} />
+                        <div className="row" style={{ gap: ".4rem" }}>
+                          <button className="primary btn-sm" onClick={saveStudent} disabled={!editStudent.external_id.trim()}>Save</button>
+                          <button className="btn-sm" onClick={() => setEditStudent(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="row" style={{ gap: ".5rem", flexWrap: "nowrap" }}>
+                        <div><strong>{s.student.external_id}</strong>{s.student.name && <div className="small muted">{s.student.name}</div>}</div>
+                        <button className="icon-btn" aria-label={`Edit ${s.student.external_id}`} title="Edit roll number / name"
+                          onClick={() => setEditStudent({ id: s.student.id, external_id: s.student.external_id, name: s.student.name })}>✎</button>
+                      </div>
+                    )}
+                  </td>
                   <td><StatusBadge status={s.status} /></td>
                   <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
                   <td><ConfidenceBadge value={s.min_confidence} label="min" /></td>

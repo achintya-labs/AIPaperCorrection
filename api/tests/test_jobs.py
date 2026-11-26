@@ -299,3 +299,49 @@ def test_bulk_assignment_modes(client, storage):
     assert put(ta_ids=[], mode="add").status_code == 422
     assert put(ta_ids=[9999]).status_code == 422
     assert client.put("/submissions/bulk/assignment", json={"submission_ids": [999], "ta_ids": []}).status_code == 404
+
+
+def test_bulk_delete(client, storage):
+    exam_id = make_exam(client)
+    a, b, c = _seed_subs(client, exam_id, [SubmissionStatus.uploaded, SubmissionStatus.ready_for_review,
+                                           SubmissionStatus.grading])
+    with TestSession() as s:
+        q = Question(rubric=Rubric(exam_id=exam_id, version=1), number="1", max_points=1)
+        s.add(q)
+        s.flush()
+        s.add(Grade(submission_id=b, question_id=q.id, ai_score=1, status=GradeStatus.reviewed))
+        s.commit()
+    post = lambda ids, **kw: client.post("/submissions/bulk/delete", json={"submission_ids": ids, **kw})  # noqa: E731
+    assert post([a, 999]).status_code == 404
+    assert post([a, c]).status_code == 409  # one is being graded: nothing deleted
+    assert post([a, b]).status_code == 409  # TA-reviewed grades need force
+    assert len(client.get("/submissions").json()) == 3
+    assert post([a, b], force=True).json() == {"deleted": 2}
+    assert [x["id"] for x in client.get("/submissions").json()] == [c]
+
+
+def test_export_zip_filters(client, storage):
+    import io
+    import zipfile
+    from app.main import app
+    from app.storage import get_storage
+    app.dependency_overrides[get_storage] = lambda: storage
+    exam_id = make_exam(client)
+    a, b = _seed_subs(client, exam_id, [SubmissionStatus.uploaded, SubmissionStatus.ready_for_review])
+    with TestSession() as s:
+        for sid in (a, b):
+            sub = s.get(Submission, sid)
+            sub.pdf_path = f"x{sid}.pdf"
+            storage.save(sub.pdf_path, make_pdf())
+        s.commit()
+    names = lambda r: sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist())  # noqa: E731
+    assert names(client.get(f"/exams/{exam_id}/export.zip")) == ["b0.pdf", "b1.pdf"]
+    assert names(client.get(f"/exams/{exam_id}/export.zip?ids={b}")) == ["b1.pdf"]
+    assert names(client.get(f"/exams/{exam_id}/export.zip?ungraded=true")) == ["b0.pdf"]
+    assert client.get(f"/exams/{exam_id}/export.zip?ids=x").status_code == 422
+    # Raw vs graded single-paper downloads: an ungraded paper gets the original from both; a graded one an annotated copy.
+    raw_a, exp_a = client.get(f"/submissions/{a}/raw.pdf"), client.get(f"/submissions/{a}/export.pdf")
+    assert raw_a.status_code == 200 and exp_a.content == raw_a.content == storage.read(f"x{a}.pdf")
+    raw_b, exp_b = client.get(f"/submissions/{b}/raw.pdf"), client.get(f"/submissions/{b}/export.pdf")
+    assert raw_b.content == storage.read(f"x{b}.pdf") and exp_b.content != raw_b.content
+    assert client.get("/submissions/999/raw.pdf").status_code == 404

@@ -313,41 +313,74 @@ def _export_pdf(sub: Submission, exam_name: str, raw_pdf: bytes, pages: list[Pag
     return pdf.add_cover_page(annotated, exam_name, student, _sections(grades), note)
 
 
+GRADED = (SubmissionStatus.ready_for_review, SubmissionStatus.reviewed)
+
+
+def _pdf_response(data: bytes, sub: Submission) -> Response:
+    stem = _safe_filename(sub.student.external_id, fallback=f"submission-{sub.id}")
+    return Response(
+        data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
+    )
+
+
+@router.get("/submissions/{submission_id}/raw.pdf")
+def raw_submission_pdf(
+    sub: Submission = Depends(get_visible_submission),
+    storage: Storage = Depends(get_storage),
+):
+    """The original scan exactly as it was uploaded, graded or not."""
+    if not storage.exists(sub.pdf_path):
+        raise HTTPException(404, "PDF not found")
+    return _pdf_response(storage.read(sub.pdf_path), sub)
+
+
 @router.get("/submissions/{submission_id}/export.pdf")
 def export_submission_pdf(
     sub: Submission = Depends(get_visible_submission),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ):
+    """The graded PDF (marks and comments beside the pages, summary page in front). A paper that is not graded yet
+    (uploaded, queued, being graded or failed) has nothing to show, so the original scan is returned instead."""
     if not storage.exists(sub.pdf_path):
         raise HTTPException(404, "PDF not found")
+    if sub.status not in GRADED:
+        return _pdf_response(storage.read(sub.pdf_path), sub)
     pages = db.scalars(select(Page).where(Page.submission_id == sub.id).order_by(Page.index)).all()
     grades = db.scalars(
         select(Grade).where(Grade.submission_id == sub.id).options(selectinload(Grade.question))
     ).all()
     exam = db.get(Exam, sub.exam_id)
     annotated = _export_pdf(sub, exam.name if exam else f"Exam {sub.exam_id}", storage.read(sub.pdf_path), list(pages), list(grades))
-    stem = _safe_filename(sub.student.external_id, fallback=f"submission-{sub.id}")
-    return Response(
-        annotated,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
-    )
+    return _pdf_response(annotated, sub)
 
 
 @router.get("/exams/{exam_id}/export.zip", dependencies=[Depends(require_admin)])
 def export_exam_pdfs(
     exam_id: int,
+    ids: str | None = None,
+    ungraded: bool = False,
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ):
+    """Every paper of the exam as PDFs in a ZIP: graded papers annotated, ungraded ones as the original scan. `ids` (comma-separated submission ids) limits it to those
+    papers. `ungraded=true` exports only papers that are uploaded or failed."""
     exam = db.get(Exam, exam_id)
     if not exam:
         raise HTTPException(404, "Exam not found")
+    q = select(Submission).where(Submission.exam_id == exam_id)
+    if ids is not None:
+        try:
+            wanted = {int(x) for x in ids.split(",") if x.strip()}
+        except ValueError:
+            raise HTTPException(422, "ids must be comma-separated numbers")
+        q = q.where(Submission.id.in_(wanted))
+    if ungraded:
+        q = q.where(Submission.status.in_([SubmissionStatus.uploaded, SubmissionStatus.failed]))
     subs = db.scalars(
-        select(Submission)
-        .where(Submission.exam_id == exam_id)
-        .options(
+        q.options(
             selectinload(Submission.student),
             selectinload(Submission.pages),
             selectinload(Submission.grades).selectinload(Grade.question),
@@ -361,7 +394,8 @@ def export_exam_pdfs(
         for s in subs:
             if not storage.exists(s.pdf_path):
                 continue
-            annotated = _export_pdf(s, exam.name, storage.read(s.pdf_path), s.pages, s.grades)
+            data = storage.read(s.pdf_path)
+            annotated = _export_pdf(s, exam.name, data, s.pages, s.grades) if s.status in GRADED else data
             base = _safe_filename(s.student.external_id, fallback=f"submission-{s.id}")
             name = f"{base}.pdf"
             if name in used_names:
@@ -369,8 +403,9 @@ def export_exam_pdfs(
             used_names.add(name)
             zf.writestr(name, annotated)
 
+    label = "ungraded-papers" if ungraded else "papers"
     return Response(
         buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="exam-{exam_id}-papers.zip"'},
+        headers={"Content-Disposition": f'attachment; filename="exam-{exam_id}-{label}.zip"'},
     )

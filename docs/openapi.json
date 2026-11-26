@@ -275,6 +275,41 @@
         "title": "BulkAssignResult",
         "type": "object"
       },
+      "BulkDeleteIn": {
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "submission_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Submission Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "submission_ids"
+        ],
+        "title": "BulkDeleteIn",
+        "type": "object"
+      },
+      "BulkDeleteResult": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "BulkDeleteResult",
+        "type": "object"
+      },
       "BulkGradeIn": {
         "properties": {
           "force": {
@@ -1003,6 +1038,34 @@
         "title": "StudentOut",
         "type": "object"
       },
+      "StudentPatch": {
+        "properties": {
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "StudentPatch",
+        "type": "object"
+      },
       "SubmissionDetail": {
         "properties": {
           "error": {
@@ -1291,6 +1354,17 @@
               }
             ],
             "title": "Active"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "role": {
             "anyOf": [
@@ -1814,7 +1888,7 @@
         ]
       },
       "patch": {
-        "description": "Change a user's role and/or active flag. Takes effect immediately: the session cookie holds\nonly the user id, and role/active are read from the database on every request.",
+        "description": "Change a user's role, active flag and/or name. Takes effect immediately: the session cookie holds\nonly the user id, and role/active are read from the database on every request.",
         "operationId": "update_user_auth_users__user_id__patch",
         "parameters": [
           {
@@ -2239,6 +2313,7 @@
     },
     "/exams/{exam_id}/export.zip": {
       "get": {
+        "description": "Every paper of the exam as PDFs in a ZIP: graded papers annotated, ungraded ones as the original scan. `ids` (comma-separated submission ids) limits it to those\npapers. `ungraded=true` exports only papers that are uploaded or failed.",
         "operationId": "export_exam_pdfs_exams__exam_id__export_zip_get",
         "parameters": [
           {
@@ -2248,6 +2323,32 @@
             "schema": {
               "title": "Exam Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ids"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ungraded",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Ungraded",
+              "type": "boolean"
             }
           },
           {
@@ -3344,6 +3445,75 @@
         ]
       }
     },
+    "/students/{student_id}": {
+      "patch": {
+        "description": "Correct a student's roll number (external_id) and/or name.",
+        "operationId": "update_student_students__student_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "student_id",
+            "required": true,
+            "schema": {
+              "title": "Student Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Student",
+        "tags": [
+          "submissions"
+        ]
+      }
+    },
     "/submissions": {
       "get": {
         "operationId": "list_submissions_submissions_get",
@@ -3484,6 +3654,66 @@
           }
         },
         "summary": "Assign Selected",
+        "tags": [
+          "submissions"
+        ]
+      }
+    },
+    "/submissions/bulk/delete": {
+      "post": {
+        "description": "Permanently delete several papers (see DELETE /submissions/{id}). All or nothing: if any is being graded, or\nany holds TA-reviewed grades and force is false, nothing is deleted.",
+        "operationId": "delete_selected_submissions_bulk_delete_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Selected",
         "tags": [
           "submissions"
         ]
@@ -3853,6 +4083,7 @@
     },
     "/submissions/{submission_id}/export.pdf": {
       "get": {
+        "description": "The graded PDF (marks and comments beside the pages, summary page in front). A paper that is not graded yet\n(uploaded, queued, being graded or failed) has nothing to show, so the original scan is returned instead.",
         "operationId": "export_submission_pdf_submissions__submission_id__export_pdf_get",
         "parameters": [
           {
@@ -3967,6 +4198,63 @@
           }
         },
         "summary": "Page Image",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/raw.pdf": {
+      "get": {
+        "description": "The original scan exactly as it was uploaded, graded or not.",
+        "operationId": "raw_submission_pdf_submissions__submission_id__raw_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Raw Submission Pdf",
         "tags": [
           "review"
         ]

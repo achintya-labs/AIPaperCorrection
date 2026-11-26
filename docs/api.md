@@ -138,8 +138,8 @@ curl -s -b jar -H 'content-type: application/json' \
 ```
 
 ### `PATCH /auth/users/{user_id}`
-Admin. Change a user's **role** and/or **active** flag. Body: `{"role": "admin" | "ta"}` and/or `{"active": bool}`;
-send at least one. **200** → `UserAdminOut`.
+Admin. Change a user's **role**, **active** flag and/or **name**. Body: `{"role": "admin" | "ta"}`, `{"active": bool}`
+and/or `{"name": str}`; send at least one. The email is the user's key and can't be changed. **200** → `UserAdminOut`.
 
 The change takes effect **immediately**, even for someone who is signed in: the session cookie holds only the user
 id, and role and active state are read from the database on every request. A deactivated user's next request gets
@@ -264,6 +264,11 @@ student's name is only updated if you send one). **201** → `StudentOut[]` `{id
 ### `GET /students`
 Admin. **200** → `StudentOut[]` ordered by `external_id`.
 
+### `PATCH /students/{student_id}`
+Admin. Corrects a student's roll number and/or name. Body `{"external_id": "EE24B001", "name": "Ann Lee"}`; send at
+least one. **200** → `StudentOut`. **404** no such student. **409** another student already has that roll number.
+**422** nothing to change, or an empty roll number.
+
 ---
 
 ## Submissions
@@ -297,6 +302,11 @@ Admin. Assigns TAs to several papers at once. Body `{"submission_ids": [3, 4], "
 `mode` is `replace` (default: each paper's TAs become exactly `ta_ids`; `[]` unassigns), `add` (keep the current TAs and
 add these) or `remove` (take these off). **200** → `{"updated": 2}`. **404** if any submission is unknown.
 **422** unknown/inactive TA, or `add`/`remove` with no TAs.
+
+### `POST /submissions/bulk/delete`
+Admin. Permanently deletes several papers (what `DELETE /submissions/{id}` does for one). Body
+`{"submission_ids": [3, 4], "force": false}`. All or nothing. **200** → `{"deleted": 2}`. **404** if any id is unknown.
+**409** if any is being graded, or any holds TA-reviewed grades and `force` is false.
 
 ### `DELETE /submissions/{submission_id}`
 Admin. **Permanently deletes one paper**: its grades, page images, grading history and assignments, and the stored PDF.
@@ -522,8 +532,13 @@ with `=`, `+`, `-` or `@` are prefixed with `'` to prevent spreadsheet formula i
 curl -s -b jar -o grades.csv $API/exams/1/export.csv
 ```
 
+### `GET /submissions/{submission_id}/raw.pdf`
+Any, scoped. The **original scan** exactly as uploaded (`application/pdf`), whether or not the paper is graded.
+**404** if missing, not yours, or PDF file not found.
+
 ### `GET /submissions/{submission_id}/export.pdf`
-Any, scoped. Downloads the submission's PDF (`application/pdf`) with each page extended to the right so that
+Any, scoped. The **graded** PDF. If the paper is not graded yet (`uploaded`, `queued`, `grading` or `failed`) it returns
+the **original scan** instead, same as `raw.pdf`. Once graded (`ready_for_review` or `reviewed`) it downloads the PDF (`application/pdf`) with each page extended to the right so that
 question scores and comments (`final_*` when reviewed/overridden, otherwise `ai_*`) appear beside the pages where
 those questions are answered without obscuring the original answer sheet. Any question not matched to a page is
 placed on the last page. A **marks summary page** is added in front, the same size as the first page: exam name, student,
@@ -536,7 +551,17 @@ curl -s -b jar -o paper.pdf $API/submissions/7/export.pdf
 
 ### `GET /exams/{exam_id}/export.zip`
 Admin. Downloads a ZIP archive (`application/zip`, `Content-Disposition: attachment; filename="exam-{id}-papers.zip"`)
-containing one annotated PDF (`<student_id>.pdf`) per submission in the exam, each with the same marks summary first page. **404** exam.
+containing one PDF (`<student_id>.pdf`) per submission in the exam: graded papers annotated with the marks summary first
+page, papers not graded yet as the original scan (the same rule as `export.pdf`). **404** exam.
+
+Query (both optional):
+
+| Param | Meaning |
+|---|---|
+| `ids` | Comma-separated submission ids: export only those papers (used by the web UI's selection) |
+| `ungraded` | `true`: only papers that are `uploaded` or `failed` (so, original scans) |
+
+Bad `ids` → **422**.
 
 ```sh
 curl -s -b jar -o papers.zip $API/exams/1/export.zip
