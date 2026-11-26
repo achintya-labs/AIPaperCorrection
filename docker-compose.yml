@@ -1,5 +1,5 @@
 # Build locally (default):   ./scripts/compose.sh up --build -d
-# Run published images:        PAPERGRADER_REGISTRY=ghcr.io/<owner>/<repo> PAPERGRADER_TAG=<version> \
+# Run published images (a release bundle already does this):  PAPERGRADER_REGISTRY=ghcr.io/<owner>/<repo> PAPERGRADER_TAG=latest \
 #                              docker compose pull && docker compose up -d --no-build
 # The project name is fixed here, so `podman-compose ps`, `docker compose ps` and ./scripts/compose.sh all see the same
 # containers and volumes no matter what the folder is called.

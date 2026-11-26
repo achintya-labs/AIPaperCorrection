@@ -110,35 +110,6 @@ jobs:
       - name: Lint the workflows
         run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
 
-  native:
-    name: Native mode (SQLite, no containers)
-    # The same system without Docker: Python + Node, a SQLite file, the fake grader (no Claude needed).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Start it
-        run: ./run.sh --native --no-https --no-claude --port 4321 --host localhost --admin-email ci@example.com
-      - name: Sign in and use the API through the web server
-        run: |
-          U=http://localhost:4321
-          PW=$(sed -n 's/^BOOTSTRAP_ADMIN_PASSWORD=//p' .env)
-          curl -fsS -o /dev/null "$U/login"
-          curl -fsS -c jar -H 'content-type: application/json' -d "{\"email\":\"ci@example.com\",\"password\":\"$PW\"}" "$U/api/auth/login"
-          curl -fsS -b jar "$U/api/auth/me"
-          curl -fsS -b jar -H 'content-type: application/json' -d '{"name":"CI exam"}' "$U/api/exams"
-      - name: Logs (on failure)
-        if: failure()
-        run: tail -n 60 native/logs/*.log
-      - name: Stop
-        if: always()
-        run: ./run.sh --native stop
-
   images:
     name: Image builds (${{ matrix.image }})
     # Catches a broken Dockerfile before merge. Publishing is release.yml's job.

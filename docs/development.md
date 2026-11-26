@@ -53,11 +53,11 @@ COMPOSE_RUNTIME=docker ./scripts/compose.sh up -d     # the same, with `docker c
 | API (auth, import, grading, review, deletion, runner, docs drift) | `api/tests` | SQLite, a stand-in `claude` executable | ~8 s |
 | Web unit tests (table search, cross-site request check, import button state, login errors) | `web/src/lib/*.test.ts` | Node's built-in runner | <1 s |
 | Type check and build | `web/` | `astro sync` (generates the `astro:*` types), `tsc`, `astro build` | ~10 s |
-| SQLite mode (`tests/test_sqlite_mode.py`: migrations on a file, WAL/foreign-key pragmas, racing workers) | `api/tests` | a temporary SQLite file | ~2 s |
+| SQLite engine used by the tests (`tests/test_sqlite_mode.py`: migrations on a file, pragmas, racing claims) | `api/tests` | a temporary SQLite file | ~2 s |
 | Postgres-only (foreign keys, row locks, job claiming, migrations) | `api/tests_pg` | a real Postgres; skipped unless `PG_TEST_URL` is set | ~2 s |
 
 The API suite is fast because the tests hash passwords at bcrypt's minimum cost (`BCRYPT_ROUNDS=4`, set in
-`api/tests/conftest.py`); production keeps the default of 12. SQLite does not enforce foreign keys and ignores
+`api/tests/conftest.py`); production keeps the default of 12. The tests run on in-memory SQLite, which does not enforce foreign keys and ignores
 `FOR UPDATE`, which is why `tests_pg` exists. Browser end-to-end tests are not in the repo yet (see
 [libraries.md](libraries.md#testing-and-quality)).
 
@@ -96,7 +96,6 @@ unanchored `storage/` also hides the `api/app/storage` Python package, which pas
 | **Postgres tests and migrations** | Postgres 16 service: `alembic upgrade head` on an empty database, `alembic check`, then `tests_pg` |
 | **Web** | `npm ci`, unit tests, `astro sync`, type check, build |
 | **Compose and workflows** | `docker compose config` parses with local and with published images; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
-| **Native mode (SQLite, no containers)** | `./run.sh --native --no-claude`: builds the web app, migrates a SQLite file, starts api, worker and web, signs in and creates an exam through the web server |
 | **Image builds** (pull requests only) | Builds the `api`, `web` and `claude` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
 
 ## Publishing images
@@ -120,14 +119,12 @@ Publishing happens **only when you push a tag that starts with `v`**. Nothing is
 To release: `git tag v1.0.0 && git push origin v1.0.0`. CI runs first; if it fails nothing is published.
 
 The same run also creates a **GitHub Release** with `papergrader-v1.0.0.tar.gz` attached. It holds `run.sh`,
-`docker-compose.yml`, `.env.example`, `proxy/nginx.conf`, the certificate and Claude-login scripts, and a `release.env`
-that pins the registry and version. The Dockerfiles stay in the repository: only CI uses them. A server never builds
-anything. `docker-compose.yml` names the images (`${PAPERGRADER_REGISTRY}/api:${PAPERGRADER_TAG}` and so on), so
-`compose pull` knows exactly what to download.
-
-Each release also attaches `papergrader-native-v1.0.0.tar.gz`: the API source, the **already built** web app, `run.sh`, the
-migrations and the TLS proxy script, with no compose file. It runs without containers (`./run.sh`, see
-[how-it-runs.md](how-it-runs.md#without-containers-native-mode-sqlite)); the machine needs Python 3.10+, Node 20+ and npm once.
+`docker-compose.yml`, `.env.example`, `proxy/nginx.conf`, the certificate and Claude-login scripts, with the release tag baked
+into `run.sh` (`VERSION=`; printed on every call). On `up`/`restart` `run.sh` compares the `org.opencontainers.image.version`
+label of the local image (set by the release workflow) with the latest GitHub release (3 s timeout, silent if it fails)
+and prints a hint to run `./run.sh pullup` when a newer one exists. The bundle's compose file is rewritten to name the published images with the tag
+`latest` (`ghcr.io/<owner>/<repo>/api:latest` and so on), so `./run.sh pull` knows exactly what to download. The
+Dockerfiles stay in the repository: only CI uses them. A server never builds anything.
 
 ### Running a release on a server
 
@@ -137,10 +134,10 @@ tar xzf papergrader-v1.0.0.tar.gz && cd papergrader-v1.0.0
 ./run.sh login                                                    # sign Claude in once
 ```
 
-`run.sh` needs only Docker or rootless Podman. It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and the
+`run.sh` needs only Podman (it installs `podman-compose` into `./.venv` if missing). It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and the
 first admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and never overwrites an
-existing `.env` or certificate. Other commands: `status`, `logs [service]`, `stop`, `down`, `pull`. In a git checkout
-(no `release.env`) it builds the images locally instead.
+existing `.env` or certificate. Other commands: `up`, `down`, `restart`, `pull`, `pullup` (down, pull, up: the way to update to the newest release),
+`status`, `logs [service]`, `login`. In a git checkout (it has `./api`) it builds the images locally instead.
 
 ### Running the published images
 
@@ -148,7 +145,7 @@ The compose file builds locally by default. Point it at the registry instead:
 
 ```sh
 export PAPERGRADER_REGISTRY=ghcr.io/<owner>/<repo>   # lower-case
-export PAPERGRADER_TAG=1.0.0    # (run.sh does this for you from release.env)
+export PAPERGRADER_TAG=1.0.0    # a release bundle already defaults to latest; set this only to pin
 docker compose pull && docker compose up -d --no-build
 ```
 

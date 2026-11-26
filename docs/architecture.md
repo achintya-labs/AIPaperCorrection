@@ -239,9 +239,6 @@ flowchart TB
 
 - Only the **`proxy`** (nginx, HTTPS) is published on the network. `web` (`127.0.0.1:4321`) and `api`
   (`127.0.0.1:8000`) are bound to loopback for development only; `claude` has no published port.
-- **Native mode** (`./run.sh --native`) runs api, worker, web and a Node TLS proxy as plain processes with SQLite. The
-  schema, migrations and application code are the same; only the engine settings (`app/db.py: make_engine`) and the job
-  claim (`jobs/queue.py: _claim_sqlite`, a conditional UPDATE instead of `SKIP LOCKED`) differ.
 - **Sign-in:** password, and optionally Google (OpenID Connect, authorization code + PKCE). Google only identifies
   someone who already has an account; it never creates one. A user with no password (blank, set by an admin) can only
   use Google.

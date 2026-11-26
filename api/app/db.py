@@ -11,7 +11,7 @@ def is_sqlite(url_or_engine) -> bool:
 
 
 def make_engine(url: str) -> Engine:
-    """Postgres (the default) or SQLite (the minimal, no-server mode: DATABASE_URL=sqlite:///path/to/file.db).
+    """Postgres (the default) or SQLite (tests and local development: DATABASE_URL=sqlite:///path/to/file.db).
 
     SQLite is set up the way the app needs it: WAL so the API and the worker process can read while one writes,
     a busy timeout so a writer waits for the other instead of failing, and foreign keys on (SQLite ignores them

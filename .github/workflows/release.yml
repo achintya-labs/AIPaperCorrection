@@ -4,8 +4,9 @@ name: Release
 # Nothing is published from branches or pull requests.
 #   v1.2.3  ->  images tagged 1.2.3, 1.2 and latest   (any other v* tag gets its own name as the tag)
 # Images: ghcr.io/<owner>/<repo>/{api,web,claude}. The worker runs the api image.
-# Also attaches papergrader-native-<tag>.tar.gz (no containers: Python + Node + SQLite) and papergrader-<tag>.tar.gz to the GitHub Release: docker-compose.yml, run.sh and what they need,
-# pinned to this version, so a machine without this repository can run it.
+# Also attaches papergrader-<tag>.tar.gz to the GitHub Release: docker-compose.yml, run.sh and what they need, plus
+# the release version baked into run.sh (printed on every call). Its docker-compose.yml points at the published "latest"
+# images, so a machine without this repository can run it with ./run.sh (podman + podman-compose).
 on:
   push:
     tags: ["v*"]
@@ -58,6 +59,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=ref,event=tag
             type=raw,value=latest
+          # run.sh reads this label to compare the image you run with the newest release
+          labels: |
+            org.opencontainers.image.version=${{ github.ref_name }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -87,48 +91,16 @@ jobs:
           cp run.sh docker-compose.yml .env.example "$dir/"
           cp proxy/nginx.conf "$dir/proxy/"
           cp scripts/make-cert.sh scripts/claude-login.sh "$dir/scripts/"
-          # Pins run.sh to these images: with release.env present it pulls instead of building.
+          # Point the bundle's compose file at the published images, tag "latest", so run.sh pulls instead of building
+          # and `./run.sh pullup` always moves to the newest release. The release tag is baked into run.sh as VERSION.
           repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
-          printf 'PAPERGRADER_REGISTRY=ghcr.io/%s\nPAPERGRADER_TAG=%s\n' "$repo" "${TAG#v}" > "$dir/release.env"
+          sed -i "s|localhost/papergrader|ghcr.io/$repo|; s|:-local}|:-latest}|" "$dir/docker-compose.yml"
+          grep -qF "ghcr.io/$repo}/api:\${PAPERGRADER_TAG:-latest}" "$dir/docker-compose.yml"
+          sed -i "s|^VERSION=dev\$|VERSION=$TAG|" "$dir/run.sh"
+          grep -qx "VERSION=$TAG" "$dir/run.sh"
           tar -czf "$dir.tar.gz" "$dir"
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" "papergrader-$TAG.tar.gz" --title "$TAG" --generate-notes
-
-  native-bundle:
-    name: Native bundle (no containers)
-    needs: bundle
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # attach the bundle to the Release created above
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Build the web app
-        working-directory: web
-        env:
-          ASTRO_TELEMETRY_DISABLED: "1"
-        run: |
-          npm ci
-          npm run build
-      - name: Assemble and attach papergrader-native-<tag>.tar.gz
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          dir="papergrader-native-$TAG"
-          mkdir -p "$dir/api" "$dir/web" "$dir/proxy" "$dir/scripts"
-          cp run.sh .env.example "$dir/"
-          cp -r api/app api/alembic api/alembic.ini api/requirements.txt "$dir/api/"
-          cp -r web/dist web/package.json web/package-lock.json "$dir/web/"
-          cp proxy/tls-proxy.mjs "$dir/proxy/"
-          cp scripts/make-cert.sh "$dir/scripts/"
-          find "$dir" -name __pycache__ -type d -prune -exec rm -rf {} +
-          # No docker-compose.yml in here: run.sh sees that and runs in native mode on its own.
-          tar -czf "$dir.tar.gz" "$dir"
-          gh release upload "$TAG" "$dir.tar.gz"

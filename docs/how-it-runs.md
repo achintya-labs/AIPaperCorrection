@@ -5,21 +5,32 @@ For the design see [architecture.md](architecture.md); for the diagrams of each 
 
 ## Prerequisites
 
-- Docker with Compose v2, **or** Podman 5 (rootless works). `podman-compose` is installed *in the repo* by
-  `./scripts/setup-dev.sh`; nothing system-wide is needed.
+- Podman 5 (rootless works; your user needs subuid/subgid ranges, `run.sh` tells you the fix if not). `podman-compose` is
+  installed into `./.venv` by `run.sh` if you don't already have it.
 - About 3 GB of disk for images (the `claude` image is ~1.5 GB because it carries Node and the CLI).
 - A way to authenticate Claude: an interactive login (Claude subscription), an OAuth token, or an API key.
 
 ## Start it
 
-**Easiest: `run.sh`.** It needs only Docker or rootless Podman. In a release bundle it pulls the published images; in a
-git checkout it builds them.
+**Easiest: `run.sh`.** It needs only Podman. It checks that `podman` is installed and that your user has subuid/subgid
+ranges (it prints the one-line fix if not), uses `podman-compose` if you already have it, and otherwise looks for Python 3.14
+(it warns and carries on with `python3` if that is missing), creates `./.venv` and installs `podman-compose` there.
+In a release bundle it pulls the published images (tag `latest`); in a git checkout it builds them.
 
 ```sh
 ./run.sh --host grader.example.edu --admin-email me@example.edu   # first run: .env + certificate + start
 ./run.sh login        # once: sign Claude in
-./run.sh status       # also: logs [service], stop, down, pull
+./run.sh pullup       # update to the latest release (down, pull, up)
 ```
+
+| Command | Runs |
+|---|---|
+| `./run.sh up` | `podman-compose up -d --force-recreate` |
+| `./run.sh down` | `podman-compose down` |
+| `./run.sh restart` | `down`, then `up` |
+| `./run.sh pull` | `podman-compose pull` (release bundles only) |
+| `./run.sh pullup` | `down`, `pull`, `up` |
+| `./run.sh status`, `logs [service]`, `login`, `env` | `ps`, `logs -f`, the Claude sign-in, where `.env` is |
 
 The first run writes `.env` (mode 600) with fresh `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD` and a random
 first-admin password (printed once), sets `COOKIE_SECURE`, `ALLOWED_HOSTS` and `PUBLIC_BASE_URL`, and makes a
@@ -42,47 +53,6 @@ cp .env.example .env
 Open **https://localhost:8443** (self-signed certificate: accept the browser warning) and sign in as the bootstrap
 admin. `compose` refuses to start if `CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty, and the `proxy` needs `certs/`.
 See [HTTPS reverse proxy](#https-reverse-proxy) for ports and real certificates.
-
-### Without containers (native mode, SQLite)
-
-For a machine with no root access and no container runtime. Same commands, one flag:
-
-```sh
-./run.sh --native --host grader.example.edu --admin-email me@example.edu   # first run
-./run.sh --native login      # once: sign Claude in (installs the CLI into ./tools if it isn't on PATH)
-./run.sh --native status     # also: logs [api|worker|web|proxy], stop, env
-```
-
-A native release bundle (`papergrader-native-vX.Y.Z.tar.gz`) has no `docker-compose.yml`, so `./run.sh` alone is native.
-
-**What it needs on the machine:** `python3` 3.10+ (with `venv`), `node` 20+ (22 recommended), `npm` once (to install the web
-server's dependencies and the Claude CLI; the bundle ships the built web app), and `openssl` once for the certificate. All of
-it can live in your home directory (pyenv/conda, a Node tarball). **What it creates, all inside the folder:** `.venv/`,
-`data/` (the database and the page storage), `native/` (logs and pid files), `tools/` (the Claude CLI), `certs/`, `.env`.
-
-**How it differs from the container setup**
-
-| | Containers | `--native` |
-|---|---|---|
-| Database | Postgres 16 | **SQLite** file `data/papergrader.db` (WAL mode), or `--db postgres --db-url postgresql+psycopg://...` |
-| Processes | db, api, worker, claude, web, proxy | api, worker, web and a small Node TLS proxy (`proxy/tls-proxy.mjs`), run in the background with pid files |
-| Claude | its own container and login volume | the CLI runs in the worker process (`GRADER_PROVIDER=claude_cli`); the login lives in your `~/.claude` |
-| Job queue | `SELECT ... FOR UPDATE SKIP LOCKED` | one conditional `UPDATE` per claim (SQLite has no row locks), safe with several workers |
-| Foreign keys | always enforced | switched on with a pragma on every connection |
-| Isolation | containers, a read-only runner | **none beyond your user account**: the Claude CLI runs as you |
-
-**Flags (native only):** `--db sqlite|postgres`, `--db-url URL`, `--https` / `--no-https` (plain HTTP on `--port`, default 4321),
-`--listen ADDR`, `--port N`, `--https-port N`, `--no-claude` (use the fake grader, to try the UI without Claude). They are
-remembered in `.env` (`NATIVE_DB`, `NATIVE_HTTPS`, `NATIVE_PORT`, `HTTPS_PORT`), so you pass them once. If the API or web port is
-busy (for example the container stack is running), the next free one is used; a busy HTTPS port stops with a message.
-
-**SQLite limits.** It is meant for one course on one machine: one writer at a time (the API and the worker wait for each
-other, so heavy grading can slow the UI slightly), the data directory must be on a local disk (not NFS), and the
-**backup is a copy of `data/`** (stop first, or copy `papergrader.db` together with its `-wal` file). For many concurrent users
-or more than one machine, use Postgres. Moving from SQLite to Postgres is not automated.
-
-**Without HTTPS.** `--no-https` serves plain HTTP on `127.0.0.1` by default. Put your own TLS proxy in front, set
-`COOKIE_SECURE=true` only then, and `--listen 0.0.0.0` only if you really want it reachable without TLS.
 
 ### Podman
 
@@ -143,7 +113,7 @@ Rows marked *not wired* have a default in `api/app/config.py` but are not passed
 | `CLAUDE_CODE_OAUTH_TOKEN` | empty | claude only | Long-lived token from `claude-login.sh token` |
 | `CLAUDE_CODE_ENABLE_TELEMETRY`, `OTEL_*` | off | claude only | See [Telemetry](#telemetry) |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1` | web (runtime) | Hostnames users browse to; see below |
-| `PAPERGRADER_REGISTRY`, `PAPERGRADER_TAG` | `localhost/papergrader`, `local` | compose | Which images to use; set to a registry and version to run [published images](development.md#running-the-published-images) |
+| `PAPERGRADER_REGISTRY`, `PAPERGRADER_TAG` | `localhost/papergrader`, `local` (bundle: `ghcr.io/<owner>/<repo>`, `latest`) | compose | Which images to use; override to pin a version of [published images](development.md#running-the-published-images) |
 | `API_INTERNAL_URL` | `http://api:8000` (compose) | web | Where the proxy forwards `/api/*` |
 
 ### ALLOWED_HOSTS

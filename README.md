@@ -12,22 +12,25 @@ claude/   The `claude` container: Claude Code CLI + the Claude login + a small a
 proxy/    nginx.conf for the HTTPS front door (the only service published on the network)
 scripts/  claude-login.sh, make-cert.sh, make-sample-data.py, export-openapi.py, ...
 samples/  A small sample exam (paper, rubric, answer sheets, CSVs) for trying the system
-run.sh    One-command launcher: writes .env, makes a certificate, then pulls/builds and starts (containers)
-          or, with --native, runs without containers on SQLite
+run.sh    One-command launcher (podman + podman-compose): sets itself up, writes .env, makes a certificate, starts
 docs/     Full documentation (start at docs/README.md)
 ```
 
 ## Quick start
 
-Needs only Docker or rootless Podman. From a release bundle (`papergrader-vX.Y.Z.tar.gz` on the GitHub Releases page):
+Needs only **Podman** (rootless, with subuid/subgid ranges). `run.sh` installs `podman-compose` into `./.venv` itself if it
+isn't already on your machine. From a release bundle (`papergrader-vX.Y.Z.tar.gz` on the GitHub Releases page):
 
 ```sh
 ./run.sh --host grader.example.edu --admin-email me@example.edu   # writes .env with fresh secrets and a
                                                                   # self-signed certificate, pulls, starts
 ./run.sh login                                                    # once: sign Claude in
+./run.sh pullup                                                   # later: update to the latest release
 ```
 
-From a git checkout (builds the images locally; `run.sh` works there too and builds instead of pulling):
+Commands: `up`, `down`, `restart`, `pull`, `pullup`, `status`, `logs [service]`, `login`, `env`.
+Images are tagged `latest`, so `pullup` (down, pull, up) always moves to the newest release; The release version is baked into
+`run.sh` and printed on every call; on `up` it also tells you when a newer release is out. From a git checkout (`run.sh up` builds the images locally the first time):
 
 ```sh
 ./scripts/setup-dev.sh   # once: repo-local .venv (podman-compose, pytest), web deps, commit hook
@@ -41,9 +44,6 @@ cp .env.example .env     # set CLAUDE_RUNNER_TOKEN (openssl rand -hex 32), JWT_S
 Open **https://localhost:8443** (self-signed: the browser warns once) and sign in with the bootstrap admin. Then:
 create an exam → write its rubric → import papers → start grading (per paper, a selection, or everything) → the worker grades them → TAs review from **My queue**.
 Optional: sign-in with Google ([how-it-runs.md](docs/how-it-runs.md#sign-in-with-google)).
-
-**No containers, no root?** `./run.sh --native` runs the same system from Python + Node with a SQLite file
-([details](docs/how-it-runs.md#without-containers-native-mode-sqlite)); add `--no-claude` to try the UI without Claude.
 
 Want something to try? [`samples/`](samples/README.md) has a small exam: question paper, rubric, four handwritten-style
 answer sheets and the CSVs for every import mode (`scripts/make-sample-data.py` regenerates it).

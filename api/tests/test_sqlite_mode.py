@@ -1,4 +1,4 @@
-"""The minimal, no-server mode: DATABASE_URL=sqlite:///file.db (see run.sh --native)."""
+"""The SQLite engine settings. SQLite is only used by the test suite and local development; production is Postgres."""
 
 import os
 import subprocess
