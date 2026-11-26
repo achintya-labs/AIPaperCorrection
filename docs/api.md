@@ -227,6 +227,13 @@ Body:
 **201** → `RubricOut` `{id, exam_id, version, questions[{id, number, text, max_points, expected_answer, criteria}]}`.
 **404** exam. **422** duplicate numbers, criteria over max, or schema errors.
 
+### `POST /exams/{exam_id}/rubric.pdf`
+Admin. Generates a **PDF of the rubric on the fly** from the JSON you send, so unsaved editor changes can be printed too.
+Nothing is stored. Body: the same as `POST /exams/{id}/rubrics`, plus an optional `"version"` shown in the header
+(omit it for a draft): `{"version": 3, "questions": [...]}`. **200** → `application/pdf` (`rubric-exam-{id}-v3.pdf`, or
+`…-draft.pdf`): exam name, question count and total marks, then per question its number, marks, text, expected answer and
+criteria (with `+`/`-` points). **404** exam. **422** same rules as saving a rubric (no questions, duplicate numbers, criteria above max).
+
 ### `GET /exams/{exam_id}/rubric`
 Any, scoped like `GET /exams`. **200** → the **latest** `RubricOut`. **404** if the exam has no rubric, and also, for a
 TA, if none of its papers are assigned to them (the rubric contains the model answers, and an unassigned exam looks

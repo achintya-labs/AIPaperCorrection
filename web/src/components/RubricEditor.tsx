@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, errMsg } from "../lib/api";
+import { api, apiBlob, ApiError, errMsg } from "../lib/api";
 import type { Criterion, Question, Rubric } from "../lib/types";
-import { downloadBlob } from "../lib/uiHelpers";
+import { downloadBlob, saveBlob } from "../lib/uiHelpers";
 import { Alert, fmt } from "./ui";
 
 type KeyedCriterion = Criterion & { _key: number };
@@ -82,6 +82,39 @@ export default function RubricEditor({ examId }: { examId: number }) {
     } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
+  /** A blank starting point: fill it in, then Import JSON. */
+  function downloadTemplate() {
+    const template = {
+      questions: [
+        {
+          number: "1",
+          text: "The question as printed (optional)",
+          max_points: 5,
+          expected_answer: "The model answer and any marking notes Claude should follow",
+          criteria: [
+            { description: "What earns these marks", points: 3 },
+            { description: "Another thing that earns marks", points: 2 },
+            { description: "A deduction (negative points)", points: -1 },
+          ],
+        },
+        { number: "2", text: "", max_points: 2, expected_answer: "", criteria: [] },
+      ],
+    };
+    downloadBlob("rubric-template.json", JSON.stringify(template, null, 2), "application/json");
+  }
+
+  /** The PDF is generated from what is in the editor right now, saved or not. */
+  async function downloadPdf() {
+    setError("");
+    try {
+      const blob = await apiBlob(`/exams/${examId}/rubric.pdf`, {
+        method: "POST",
+        json: { version: dirty ? null : version, questions: strip(qs) },
+      });
+      saveBlob(`rubric-exam-${examId}${dirty || !version ? "-draft" : `-v${version}`}.pdf`, blob);
+    } catch (e) { setError(errMsg(e)); }
+  }
+
   function exportJson() {
     downloadBlob(`rubric-exam-${examId}.json`, JSON.stringify({ questions: strip(qs) }, null, 2), "application/json");
   }
@@ -120,11 +153,13 @@ export default function RubricEditor({ examId }: { examId: number }) {
         <h2 style={{ margin: 0 }}>Rubric {version ? <span className="muted">· version {version}</span> : <span className="muted">· none yet</span>}</h2>
         <div className="row">
           <span className="muted small">{qs.length} questions · {fmt(totalPts)} pts</span>
+          <button onClick={downloadPdf} disabled={errs.length > 0 || qs.length === 0} title="A PDF of the rubric as it is in the editor now">Download PDF</button>
           <button onClick={exportJson}>Export JSON</button>
           <label className="btn" style={{ margin: 0, color: "var(--text)" }}>
             Import JSON
             <input type="file" accept="application/json,.json" hidden onChange={(e) => { importJson(e.target.files?.[0]); e.target.value = ""; }} />
           </label>
+          <button className="primary" onClick={downloadTemplate} title="A blank rubric JSON to fill in and import">JSON template</button>
         </div>
       </div>
       {error && <Alert tone="bad">{error}</Alert>}

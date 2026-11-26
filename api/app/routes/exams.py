@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import current_user, require_admin
-from app import deletion
+from app import deletion, pdf
 from app.db import get_db
 from app.models import Exam, Question, Role, Rubric, SplitJob, Submission, User, submission_tas
 from app.storage import Storage, get_storage
@@ -139,6 +139,22 @@ def create_rubric_version(exam_id: int, body: RubricIn, db: Session = Depends(ge
     db.add(rubric)
     db.commit()
     return rubric
+
+
+class RubricPdfIn(RubricIn):
+    version: int | None = None  # shown in the PDF header; omit for an unsaved draft
+
+
+@router.post("/{exam_id}/rubric.pdf", dependencies=[Depends(require_admin)])
+def rubric_pdf(exam_id: int, body: RubricPdfIn, db: Session = Depends(get_db)):
+    """A PDF of the rubric JSON you send (so unsaved edits can be printed too), generated on the fly. Nothing is stored."""
+    exam = db.get(Exam, exam_id)
+    if not exam:
+        raise HTTPException(404, "Exam not found")
+    _validate_rubric(body)
+    data = pdf.rubric_pdf(exam.name, body.version, [q.model_dump() for q in body.questions])
+    name = f"rubric-exam-{exam_id}" + (f"-v{body.version}" if body.version else "-draft")
+    return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'})
 
 
 @router.get("/{exam_id}/rubric", response_model=RubricOut)

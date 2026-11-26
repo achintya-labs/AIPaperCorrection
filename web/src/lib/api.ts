@@ -52,4 +52,25 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   return body as T;
 }
 
+/** Like api(), but returns the response body as a Blob (PDFs, ZIPs). Errors are parsed like api()'s. */
+export async function apiBlob(path: string, init: RequestInit & { json?: unknown } = {}): Promise<Blob> {
+  const { json, ...rest } = init;
+  const headers = new Headers(rest.headers);
+  if (json !== undefined) {
+    headers.set("content-type", "application/json");
+    rest.body = JSON.stringify(json);
+  }
+  const res = await fetch(`/api${path}`, { ...rest, headers });
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new ApiError(401, null, "Session expired");
+  }
+  if (!res.ok) {
+    let detail: unknown = await res.text();
+    try { const j: unknown = JSON.parse(detail as string); detail = isRecord(j) && "detail" in j ? j.detail : j; } catch { /* plain text */ }
+    throw new ApiError(res.status, detail, describe(detail));
+  }
+  return res.blob();
+}
+
 export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

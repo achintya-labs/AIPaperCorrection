@@ -30,6 +30,16 @@ export function useDismiss(
   }, [open, boxRef, onClose, triggerRef]);
 }
 
+/** Save a Blob (e.g. a PDF fetched from the API) as a file. */
+export function saveBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Trigger a client-side file download from an in-memory string. */
 export function downloadBlob(filename: string, content: string, mimeType: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mimeType }));

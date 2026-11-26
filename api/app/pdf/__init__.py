@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import html
+import io
 import threading
 
 import fitz  # PyMuPDF
@@ -207,6 +208,65 @@ def _cover_html(exam_name: str, student: str, sections: list[SectionScore], note
         + note_html
         + "</div>"
     )
+
+
+def _rubric_html(exam_name: str, version: int | None, questions: list[dict]) -> str:
+    def text(value: str) -> str:
+        return html.escape(value).replace("\n", "<br/>")
+
+    total = sum(float(q.get("max_points") or 0) for q in questions)
+    label = f"version {version}" if version else "draft"
+    parts = [
+        '<div style="font-family:sans-serif;color:#0f172a;font-size:10px;">'
+        '<div style="font-size:9px;letter-spacing:1px;color:#64748b;">MARKING SCHEME</div>'
+        f'<div style="font-size:22px;font-weight:bold;margin-top:2px;">{html.escape(exam_name)}</div>'
+        f'<div style="font-size:11px;color:#334155;margin-top:3px;">Rubric {label} · {len(questions)} questions · {total:g} marks</div>'
+        '<div style="border-top:2px solid #334155;margin-top:8px;"></div>'
+    ]
+    def box(title: str, body: str, color: str, bg: str, border: str) -> str:
+        return (
+            f'<div style="margin-top:6px;padding:6px 8px;background-color:{bg};border:1px solid {border};">'
+            f'<div style="font-size:9px;font-weight:bold;letter-spacing:1px;color:{color};">{title}</div>'
+            f'<div style="margin-top:3px;">{body}</div></div>'
+        )
+
+    for q in questions:
+        crit = "".join(
+            f'<div style="margin-top:2px;"><b style="color:{"#166534" if float(c["points"]) >= 0 else "#b91c1c"};">'
+            f'{float(c["points"]):+g}</b>&nbsp; {text(str(c["description"]))}</div>'
+            for c in q.get("criteria") or []
+        )
+        parts.append(
+            '<div style="margin-top:14px;">'
+            '<div style="padding:5px 8px;background-color:#1e293b;color:#ffffff;">'
+            f'<b style="font-size:13px;">Question {html.escape(str(q["number"]))}</b>'
+            f'<span style="font-size:11px;"> &nbsp;·&nbsp; {float(q["max_points"]):g} marks</span></div>'
+            + (box("QUESTION", text(q["text"]), "#1d4ed8", "#eff6ff", "#93c5fd") if q.get("text") else "")
+            + (box("EXPECTED ANSWER", text(q["expected_answer"]), "#15803d", "#f0fdf4", "#86efac") if q.get("expected_answer") else "")
+            + (box("MARKING CRITERIA", crit, "#b45309", "#fffbeb", "#fcd34d") if crit else "")
+            + "</div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def rubric_pdf(exam_name: str, version: int | None, questions: list[dict], margin: float = 48.0) -> bytes:
+    """A readable PDF of a rubric (question, marks, expected answer, criteria), laid out across as many A4 pages as needed."""
+    markup = _rubric_html(exam_name, version, questions)
+    buf = io.BytesIO()
+    with _lock:
+        writer = fitz.DocumentWriter(buf)
+        story = fitz.Story(html=markup)
+        media = fitz.paper_rect("a4")
+        where = media + (margin, margin, -margin, -margin)
+        more = 1
+        while more:
+            dev = writer.begin_page(media)
+            more, _ = story.place(where)
+            story.draw(dev)
+            writer.end_page()
+        writer.close()
+    return buf.getvalue()
 
 
 def add_cover_page(

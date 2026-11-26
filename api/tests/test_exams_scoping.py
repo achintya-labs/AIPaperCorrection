@@ -207,3 +207,28 @@ def test_admin_edits_student_and_user_name(client):
     assert client.patch(f"/students/{bid}", json={}).status_code == 422
     assert client.patch("/students/999", json={"name": "x"}).status_code == 404
     assert client.patch(f"/auth/users/{ta_id}", json={"name": "Tia"}).json()["name"] == "Tia"
+
+
+def test_rubric_pdf_is_generated_from_the_posted_json(client):
+    import fitz
+    exam_id = make_exam(client)
+    body = {"version": 3, "questions": [
+        {"number": "1", "text": "Name <b>x</b>", "max_points": 4, "expected_answer": "line one\nline two",
+         "criteria": [{"description": "Names x", "points": 3}, {"description": "Wrong unit", "points": -1}]},
+        {"number": "2", "max_points": 2}]}
+    r = client.post(f"/exams/{exam_id}/rubric.pdf", json=body)
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert 'filename="rubric-exam-%d-v3.pdf"' % exam_id in r.headers["content-disposition"]
+    with fitz.open(stream=r.content, filetype="pdf") as doc:
+        text = "".join(p.get_text() for p in doc)
+    assert "MARKING SCHEME" in text and "version 3" in text and "6 marks" in text
+    assert "Name <b>x</b>" in text and "line two" in text and "Names x" in text and "-1" in text
+    draft = client.post(f"/exams/{exam_id}/rubric.pdf", json={"questions": body["questions"]})
+    assert "-draft.pdf" in draft.headers["content-disposition"]
+    assert client.post(f"/exams/{exam_id}/rubric.pdf", json={"questions": []}).status_code == 422
+    dup = {"questions": [{"number": "1", "max_points": 1}, {"number": "1", "max_points": 1}]}
+    assert client.post(f"/exams/{exam_id}/rubric.pdf", json=dup).status_code == 422
+    assert client.post("/exams/999/rubric.pdf", json=body).status_code == 404
+    client.post("/auth/logout")
+    login(client, "ta@x.io")
+    assert client.post(f"/exams/{exam_id}/rubric.pdf", json=body).status_code == 403

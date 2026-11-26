@@ -92,6 +92,7 @@ def test_every_route_has_expected_auth_dependency(client):
         ("POST", "/exams"),
         ("PATCH", "/exams/{exam_id}"),
         ("POST", "/exams/{exam_id}/rubrics"),
+        ("POST", "/exams/{exam_id}/rubric.pdf"),
         ("DELETE", "/exams/{exam_id}"),
         ("POST", "/students"),
         ("GET", "/students"),

@@ -987,6 +987,34 @@
         "title": "RubricOut",
         "type": "object"
       },
+      "RubricPdfIn": {
+        "properties": {
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionIn"
+            },
+            "minItems": 1,
+            "title": "Questions",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "questions"
+        ],
+        "title": "RubricPdfIn",
+        "type": "object"
+      },
       "SplitJobStatus": {
         "enum": [
           "queued",
@@ -3217,6 +3245,73 @@
           }
         },
         "summary": "Get Latest Rubric",
+        "tags": [
+          "exams"
+        ]
+      }
+    },
+    "/exams/{exam_id}/rubric.pdf": {
+      "post": {
+        "description": "A PDF of the rubric JSON you send (so unsaved edits can be printed too), generated on the fly. Nothing is stored.",
+        "operationId": "rubric_pdf_exams__exam_id__rubric_pdf_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RubricPdfIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rubric Pdf",
         "tags": [
           "exams"
         ]
