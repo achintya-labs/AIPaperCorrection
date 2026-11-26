@@ -26,6 +26,11 @@
 		directives `
 			Include @coraza.conf-recommended
 			Include @crs-setup.conf.example
+			# --- Paper Grader (the app at the bare domain). The app is a JSON API that uses PUT, PATCH and DELETE, takes free text
+			# (rubrics, TA feedback) and uploads scans of up to MAX_UPLOAD_MB. CRS's defaults block all of that, so each item below
+			# lets exactly one thing through; everything else (URLs, headers, other fields) is still inspected in full. ---
+			# CRS 911100 only allows GET HEAD POST OPTIONS. The variable must be set BEFORE the rule files below read it.
+			SecAction "id:10030,phase:1,nolog,pass,t:none,setvar:'tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE'"
 			Include @owasp_crs/*.conf
 			SecRuleEngine On
 			# False positives: LLDAP's GraphQL query text (e.g. $filters, user( trips SQLi rules.
@@ -38,6 +43,13 @@
 			# "query" text field, only on LLDAP's GraphQL endpoint; the "variables" are still fully inspected.
 			SecRule REQUEST_HEADERS:Host "@rx ^lldap\." "id:10002,phase:1,pass,nolog,chain"
 				SecRule REQUEST_URI "@beginsWith /api/graphql" "ctl:ruleRemoveTargetById=932235;ARGS:json.query"
+			# Scan uploads (multipart PDFs/CSVs): CRS buffers the whole body and rejects anything over 13 MB (413), and a PDF's bytes can only
+			# produce false positives. Skip body buffering/inspection on exactly the two upload routes; the app enforces the real size limit.
+			SecRule REQUEST_URI "@rx ^/api/exams/[0-9]+/imports(/auto-split)?$" "id:10031,phase:1,pass,nolog,ctl:requestBodyAccess=Off"
+			# Free text typed by admins and TAs: rubric questions, expected answers and criteria (code, SQL, shell, HTML, maths such as sqrt(
+			# and ../ are all legitimate course content), and TA feedback on a grade. Only those JSON fields, only on those routes.
+			SecRule REQUEST_URI "@rx ^/api/exams/[0-9]+/(rubrics|rubric\.pdf)$" "id:10032,phase:1,pass,nolog,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:/^json\.questions\./,ctl:ruleRemoveTargetByTag=attack-xss;ARGS:/^json\.questions\./,ctl:ruleRemoveTargetByTag=attack-rce;ARGS:/^json\.questions\./,ctl:ruleRemoveTargetByTag=attack-lfi;ARGS:/^json\.questions\./,ctl:ruleRemoveTargetByTag=attack-injection-php;ARGS:/^json\.questions\./,ctl:ruleRemoveTargetByTag=attack-injection-generic;ARGS:/^json\.questions\./"
+			SecRule REQUEST_URI "@rx ^/api/grades/[0-9]+$" "id:10033,phase:1,pass,nolog,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:json.final_feedback,ctl:ruleRemoveTargetByTag=attack-xss;ARGS:json.final_feedback,ctl:ruleRemoveTargetByTag=attack-rce;ARGS:json.final_feedback,ctl:ruleRemoveTargetByTag=attack-lfi;ARGS:json.final_feedback,ctl:ruleRemoveTargetByTag=attack-injection-php;ARGS:json.final_feedback,ctl:ruleRemoveTargetByTag=attack-injection-generic;ARGS:json.final_feedback"
 		`
 	}
 }

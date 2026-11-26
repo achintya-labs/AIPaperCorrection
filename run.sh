@@ -7,6 +7,9 @@
 #   ./run.sh pull      download the latest images:                podman-compose pull
 #   ./run.sh pullup    down, pull, up: update to the latest release
 #   ./run.sh status | logs [service] | login | env
+#   ./run.sh compose ARGS...   run podman-compose for this project with the right profile (exec, ps, build ...): the release bundle
+#                              has no scripts/compose.sh, so this is the way to e.g. ./run.sh compose exec -T db pg_dump -U grader grader
+#   ./run.sh caddy FILE        put a new Caddyfile into the running gateway and reload it (--show prints the live one, --revert undoes)
 #   ./run.sh migrate   sso, MANUAL and never part of `up`: copy the app's existing users into LLDAP (no passwords).
 #                            export-users does just the export (writes ldap-bootstrap/users.jsonl).
 #
@@ -63,13 +66,16 @@ while [ $# -gt 0 ]; do
     --auth-mode) [ $# -ge 2 ] || die "--auth-mode needs sso or local"; AUTHMODE_ARG=$2; shift 2 ;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1 (see ./run.sh --help)" ;;
-    *) if [ -z "$CMD" ]; then CMD=$1; else REST="$REST $1"; fi; shift ;;
+    *) if [ -z "$CMD" ]; then
+         CMD=$1; shift
+         case "$CMD" in compose|caddy) break ;; esac   # everything after these belongs to them, flags included: "$@" keeps it intact
+       else REST="$REST $1"; shift; fi ;;
   esac
 done
 CMD=${CMD:-up}
 case "$CMD" in
-  up|down|restart|pull|pullup|status|logs|login|env|export-users|migrate) ;;
-  *) die "unknown command '$CMD' (up, down, restart, pull, pullup, status, logs, login, env, export-users, migrate)" ;;
+  up|down|restart|pull|pullup|status|logs|login|env|export-users|migrate|compose|caddy) ;;
+  *) die "unknown command '$CMD' (up, down, restart, pull, pullup, status, logs, login, env, export-users, migrate, compose, caddy)" ;;
 esac
 case "$AUTHMODE_ARG" in ""|sso|local) ;; *) die "--auth-mode must be sso or local" ;; esac
 
@@ -114,7 +120,7 @@ else
 fi
 AUTH_MODE=sso  # set for real once .env exists (below)
 compose() { "$PC" -p papergrader --profile "$AUTH_MODE" "$@"; }
-compose_all() { "$PC" -p papergrader --profile sso --profile local "$@"; }  # down: remove whichever mode was running
+compose_setup() { "$PC" -p papergrader --profile sso --profile setup "$@"; }  # the one-shot setup containers (run --rm)
 
 # A release bundle has no source tree: its compose file names the published "latest" images, which are pulled.
 PUBLISHED=0
@@ -320,12 +326,85 @@ make_gateway_cert() {
   echo "Wrote a self-signed certificate for $d, auth.$d and lldap.$d (gateway/tls/, valid 365 days)."
 }
 
+# sso: the one-shot setup (create the lldap database, then the read-only account, groups and first admin), done BEFORE the long-running
+# services start and run with --rm so nothing is left over for them to depend on. A service that depends on a finished one-shot
+# can't be restarted by Podman after a reboot ("dependencies ... are not running: container state improper").
+sso_setup() {
+  podman rm -f papergrader_lldap-db-init_1 papergrader_lldap-bootstrap_1 >/dev/null 2>&1 || true  # leftovers from older versions
+  echo "Preparing the user directory ..."
+  compose up -d db >/dev/null 2>&1 || die "could not start the database"
+  i=0; until compose exec -T db pg_isready -U grader >/dev/null 2>&1; do
+    i=$((i+1)); [ "$i" -lt 60 ] || die "the database did not become ready"; sleep 1
+  done
+  compose_setup run --rm -T --no-deps lldap-db-init || die "creating the lldap database failed (output above)"
+  compose up -d lldap >/dev/null 2>&1 || die "could not start LLDAP"
+  i=0; until compose exec -T lldap /app/lldap healthcheck --config-file /data/lldap_config.toml >/dev/null 2>&1; do
+    i=$((i+1)); [ "$i" -lt 90 ] || die "LLDAP did not become ready (./run.sh logs lldap)"; sleep 1
+  done
+  log=$(mktemp)
+  if ! compose_setup run --rm -T --no-deps lldap-bootstrap > "$log" 2>&1; then
+    tail -n 25 "$log" >&2
+    rm -f "$log"
+    die "the LLDAP bootstrap failed (output above)"
+  fi
+  rm -f "$log"
+}
+
+# Stop and remove the containers. `compose down` complains ("no container with name or ID ...") for every service of the profile
+# it is given that was never created, so it only gets the running mode's profile; containers that belong to no running profile
+# (the other mode's, and the one-shot setup/migrate ones) are removed here, only when they actually exist.
+do_down() {
+  if [ "$AUTH_MODE" = sso ]; then others="proxy"; else others="caddy tinyauth lldap"; fi
+  for svc in $others lldap-db-init lldap-bootstrap lldap-import; do
+    if podman container exists "papergrader_${svc}_1" 2>/dev/null; then
+      podman rm -f "papergrader_${svc}_1" >/dev/null 2>&1 || warn "could not remove papergrader_${svc}_1"
+    fi
+  done
+  compose down
+}
+
+# MANUAL: put a new Caddyfile into the RUNNING gateway container and reload Caddy (no downtime, no rebuild). This is for a server that
+# only has the release bundle (the Caddyfile is baked into the image there). The file is validated inside the container first, so it sees
+# the container's real DOMAIN, LLDAP_ADMIN_USERS and certificates; a failed reload restores the previous file. The change lives in the
+# container only: up / pullup recreate it from the image. To keep it, change gateway/Caddyfile in the repo and release.
+caddy_update() {
+  [ "$AUTH_MODE" = sso ] || die "caddy is for AUTH_MODE=sso (there is no gateway in local mode)"
+  conf=/etc/caddy/Caddyfile
+  compose exec -T caddy true >/dev/null 2>&1 || die "the caddy container is not running (./run.sh status). Start the stack first: ./run.sh up"
+  case "${1:-}" in
+    --show) compose exec -T caddy cat "$conf"; return ;;
+    --revert)
+      compose exec -T caddy sh -c "test -f $conf.bak" || die "there is no previous Caddyfile to go back to"
+      compose exec -T caddy sh -c "cp $conf.bak $conf"
+      compose exec -T caddy caddy reload --config "$conf" --adapter caddyfile || die "reloading the previous Caddyfile failed (see above)"
+      echo "Reverted to the previous Caddyfile."; return ;;
+    ""|-h|--help) echo "usage: ./run.sh caddy FILE | --show | --revert"; return ;;
+  esac
+  [ -s "$1" ] || die "'$1' does not exist or is empty"
+  echo "Uploading $1 ..."
+  compose exec -T caddy sh -c 'cat > /tmp/Caddyfile.new' < "$1" || die "could not copy the file into the container"
+  echo "Validating inside the container ..."
+  if ! cout=$(compose exec -T caddy caddy validate --config /tmp/Caddyfile.new --adapter caddyfile 2>&1); then
+    printf '%s\n' "$cout" | grep -v '^{"level":"info"' || true   # Caddy's info lines are noise; its error line is JSON too, so keep it
+    die "the new Caddyfile is not valid; nothing was changed"
+  fi
+  printf '%s\n' "$cout" | grep -v '^{"level":"info"' || true
+  echo "Installing and reloading ..."
+  compose exec -T caddy sh -c "cp $conf $conf.bak && cp /tmp/Caddyfile.new $conf"
+  if ! compose exec -T caddy caddy reload --config "$conf" --adapter caddyfile; then
+    compose exec -T caddy sh -c "cp $conf.bak $conf"
+    die "reload failed; the previous Caddyfile was restored"
+  fi
+  echo "Done. Caddy runs the new Caddyfile until the container is recreated (./run.sh up / pullup). Undo with: ./run.sh caddy --revert"
+}
+
 do_up() {
   check_update
   build_images
   if [ "$AUTH_MODE" = sso ]; then
     mkdir -p gateway/tls  # bind-mount source must exist
     make_gateway_cert
+    sso_setup
   else
     make_cert
   fi
@@ -347,12 +426,15 @@ do_up() {
 
 case "$CMD" in
   up) do_up ;;
-  down) compose_all down ;;
-  restart) compose_all down && do_up ;;
+  down) do_down ;;
+  restart) do_down && do_up ;;
   pull) need_published; compose pull ;;
-  pullup) need_published; compose_all down && compose pull && do_up ;;
+  pullup) need_published; do_down && compose pull && do_up ;;
   export-users) [ "$AUTH_MODE" = sso ] || die "export-users is for AUTH_MODE=sso"; export_users ;;
   migrate) migrate_users ;;
+  compose) [ $# -gt 0 ] || die "usage: ./run.sh compose <podman-compose arguments>, e.g. ./run.sh compose exec -T db pg_dump -U grader grader"
+           compose "$@" ;;
+  caddy) caddy_update "$@" ;;
   status) compose ps ;;
   logs) # shellcheck disable=SC2086
         compose logs -f --tail 200 $REST ;;

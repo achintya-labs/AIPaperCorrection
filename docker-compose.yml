@@ -228,15 +228,18 @@ services:
       TINYAUTH_LDAP_SEARCHFILTER: (uid=%s)
       TINYAUTH_LDAP_INSECURE: "true"
     networks: [default, edge]  # edge: outbound internet for Google sign-in
+    # Depends on lldap (a long-running service). It must NOT depend on the one-shot setup containers: Podman records such a
+    # dependency as --requires, and after a reboot it then refuses to restart this container because the one-shot has exited
+    # ("dependencies ... are not running: container state improper"). run.sh runs the setup first instead.
     depends_on:
-      lldap-bootstrap:
-        condition: service_completed_successfully
+      lldap:
+        condition: service_healthy
     restart: unless-stopped
 
   # Creates the `lldap` role and database inside the app's Postgres. Idempotent, and a service rather than an init script
   # because /docker-entrypoint-initdb.d only runs on a brand-new data volume, not on an existing install.
   lldap-db-init:
-    profiles: ["sso"]
+    profiles: ["setup"]  # run by ./run.sh up before the services that need it (never a dependency, see tinyauth)
     image: docker.io/library/postgres:16
     restart: "no"
     environment:
@@ -268,8 +271,8 @@ services:
       LLDAP_LDAP_USER_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
       LLDAP_DATABASE_URL: postgres://lldap:${LLDAP_DB_PASSWORD:-}@db/lldap
     depends_on:
-      lldap-db-init:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     # Declared here rather than relying on the image's own HEALTHCHECK: Podman drops it, and lldap-bootstrap waits on
     # `service_healthy`, which then never comes (the stack just sits at "Created").
     healthcheck:
@@ -283,7 +286,7 @@ services:
   # One-shot: the read-only account Tinyauth and the app bind with, the two role groups, and the built-in admin as an app admin.
   # It never imports people: moving users from an older install is a manual step (./run.sh migrate).
   lldap-bootstrap:
-    profiles: ["sso"]
+    profiles: ["setup"]
     image: docker.io/lldap/lldap:stable
     restart: "no"
     depends_on:

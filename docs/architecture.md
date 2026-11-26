@@ -57,7 +57,7 @@ flowchart LR
 | `caddy` | `gateway/Dockerfile` (Caddy + Coraza + OWASP CRS), `gateway/Caddyfile` | sso only. The **only published port**. WAF first, then Tinyauth `forward_auth`, then `web`. Serves `<DOMAIN>` (the app), `auth.<DOMAIN>` and `lldap.<DOMAIN>` with a self-signed certificate from `gateway/tls/` | the TLS key |
 | `tinyauth` | `ghcr.io/tinyauthapp/tinyauth` | sso only. Login portal; checks LDAP (and optionally Google); tells Caddy to add `Remote-User/Name/Email` | LDAP read-only bind password |
 | `lldap` | `lldap/lldap` on Postgres | sso only. The user directory and its admin UI: users, passwords, the two role groups | its Postgres password, JWT secret, key seed |
-| `lldap-db-init`, `lldap-bootstrap` | `postgres:16`, `lldap/lldap` | sso only, one-shot at every `up`: create the `lldap` role/database; create the read-only account, the groups and the first admin. They never import people (that is `./run.sh migrate`) | |
+| `lldap-db-init`, `lldap-bootstrap` | `postgres:16`, `lldap/lldap` | sso only, one-shots (profile `setup`) that `./run.sh up` runs with `--rm` before the services above: create the `lldap` role/database; create the read-only account, the groups and the first admin. They never import people (that is `./run.sh migrate`), and nothing depends on them, so reboots can restart everything | |
 | `proxy` | `nginx` | local mode only: the old HTTPS front door | the TLS key |
 | `web` | `web/` (Astro 5, Node adapter, React 18 islands) | Pages, sign-in notices, role gate for `/admin`, same-origin proxy `/api/*` → `api` | nothing secret |
 | `api` | `api/` (FastAPI, SQLAlchemy 2, Alembic) | Sign-in (sso: reads `Remote-Email`, looks the person up in LDAP; local: password/Google), exams/rubrics, import, review, export. Runs migrations on start | `JWT_SECRET`, DB password, runner token, LDAP observer password |
@@ -266,8 +266,9 @@ flowchart TB
   `lldap.<DOMAIN>` is closed to everyone except the user ids in `LLDAP_ADMIN_USERS` (checked against Tinyauth's `Remote-User` after `forward_auth`).
   LDAP itself is not published, so the UI is the only write path.
 - **Authorisation is LDAP groups**, re-read every request (cached ~30 s): admins, TAs, or "not enrolled". The app never stores a password in sso mode.
-- **WAF:** the OWASP Core Rule Set runs before authentication. Known false positives are excluded narrowly in `gateway/Caddyfile` (one rule id, one
-  field, one path); nothing is switched off globally.
+- **WAF:** the OWASP Core Rule Set runs before authentication. Exclusions live in `gateway/Caddyfile` and are narrow: the allowed HTTP methods now include PUT, PATCH and DELETE (the app needs them), the two
+  upload routes skip body buffering, and only the free-text JSON fields (rubric text, grade feedback) skip the injection rules; everything else, including
+  URLs, headers, cookies and names, is inspected in full (`scripts/waf-probe.py` checks both directions).
 - **Sign-in (`AUTH_MODE=local`):** password, and optionally Google (OpenID Connect, authorization code + PKCE). Google only identifies
   someone who already has an account; it never creates one. A user with no password (blank, set by an admin) can only
   use Google.

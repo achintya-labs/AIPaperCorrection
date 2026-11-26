@@ -56,6 +56,18 @@ With `AUTH_MODE=local`, open **https://localhost:8443** (self-signed certificate
 admin. `compose` refuses to start if `CLAUDE_RUNNER_TOKEN` or `JWT_SECRET` is empty, and the `proxy` needs `certs/`.
 See [HTTPS reverse proxy](#https-reverse-proxy-auth_modelocal-only) for ports and real certificates.
 
+### Changing the gateway's Caddyfile on a live server
+
+The Caddyfile is baked into the `gateway` image, and a release bundle doesn't carry it, so there is no file to edit on the server. Two ways:
+
+- **Permanent:** change `gateway/Caddyfile` in the repo, push a `v*` tag, then `./run.sh pullup` on the server (on a git checkout: `git pull && ./run.sh up`).
+- **Right now, on this server only** (survives restarts, not `up` or `pullup`): write the new file anywhere and run `./run.sh caddy path/to/Caddyfile`. It copies the file
+  into the running `caddy` container, validates it there (so it sees the container's real `DOMAIN`, `LLDAP_ADMIN_USERS` and certificates), installs it and reloads Caddy
+  without downtime; if the reload fails the previous file is put back. `./run.sh caddy --show` prints the Caddyfile the container is running now (start from that),
+  and `./run.sh caddy --revert` undoes the last change. Needs only `run.sh`, which the bundle has.
+
+Other `podman-compose` commands for the project (the bundle has no `scripts/compose.sh`): `./run.sh compose <arguments>`, for example `./run.sh compose exec -T db psql -U grader grader`.
+
 ### Single sign-on (the default, `AUTH_MODE=sso`)
 
 Login is handled by a gateway that runs in the same compose, on the private network, and is the **only** thing published on
@@ -90,8 +102,14 @@ browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, option
   `up`, so resets don't repeat it, and it is safe to run again. Everyone keeps their papers and grades: on their first sign-in they are
   matched by email. **Passwords cannot be carried over** (LDAP can't import the stored hashes): people sign in with Google (set
   `OAUTH_WHITELIST` and the Google keys) or an admin sets their password in LLDAP. Anyone who should keep access but isn't in a group sees "not enrolled".
-- **The WAF** is the OWASP Core Rule Set, unchanged. If it blocks something legitimate (403 from Caddy, usually a rubric, CSV or very large
-  PDF upload; the default request body limit is 13 MB), find the rule id (enable `SecAuditEngine` in `gateway/Caddyfile`) and add a narrowly
+- **The WAF** is the OWASP Core Rule Set plus a few narrow exclusions for how this app works (`gateway/Caddyfile`, rule ids 10001 to 10033), found by
+  sending realistic requests for every endpoint through it (`scripts/waf-probe.py`, which also checks that real attacks stay blocked):
+  `PUT`, `PATCH` and `DELETE` are allowed (CRS permits only GET/HEAD/POST/OPTIONS, which broke every edit, assignment and delete); the two upload routes
+  skip body buffering (CRS rejects bodies over 13 MB and a scan can only give false positives; the app's own `MAX_UPLOAD_MB` still applies); and only
+  the free-text JSON fields skip the SQL/XSS/command/path rules: rubric questions, expected answers and criteria, and a TA's grade feedback (code, SQL, shell,
+  HTML and maths like `sqrt(` or `../` are normal course content). URLs, headers, cookies, names and every other field are still inspected in full:
+  an exam or student name that looks like an attack, `<script>` in a URL, or a SQL-injection query string is still a 403. If the WAF blocks something
+  else legitimate (403 from Caddy), find the rule id (`./run.sh logs caddy | grep "Coraza: Warning"`) and add a narrowly
   scoped exclusion there, as is already done for LLDAP's GraphQL endpoint.
 - **Logging out** goes to Tinyauth (`LOGOUT_URL`). **`AUTH_MODE=local`** keeps the app's own password / Google login behind the nginx proxy
   (development, the test suite, or break-glass if the gateway is down); switch with `./run.sh --auth-mode local up`.
@@ -112,8 +130,8 @@ refuses short names when it can't prompt. Containers are named `<project>_<servi
 
 ### First-run checklist
 
-1. `./run.sh status`: `db`, `claude` and `lldap` show *healthy*; `api`, `worker`, `web`, `tinyauth` and `caddy` are up; `lldap-db-init` and
-   `lldap-bootstrap` have *Exited (0)* (they are one-shot).
+1. `./run.sh status`: `db`, `claude` and `lldap` show *healthy*; `api`, `worker`, `web`, `tinyauth` and `caddy` are up. The one-shot setup
+   containers (`lldap-db-init`, `lldap-bootstrap`) run with `--rm` during `up`, so none are left over in `status`.
 2. The hosts file on the browsing machine has `<DOMAIN>`, `auth.<DOMAIN>` and `lldap.<DOMAIN>`; `https://<DOMAIN>:5904` shows the login portal.
 3. Sign in as `admin` (password `LLDAP_ADMIN_PASSWORD`). The Exams page shows no "Grading isn't ready" banner (or `GET /grader/status`
    returns `"ready": true`); if it does, run `./run.sh login`.
@@ -182,7 +200,7 @@ If the hostname people browse to is not listed, **uploads and body-less POSTs fa
 submissions are forbidden"**. `localhost,127.0.0.1` is the default.
 
 It is read at **runtime**, so one image (including the published one) works on any hostname. Change it in `.env`
-and restart only the web container: `./scripts/compose.sh up -d --force-recreate --no-deps web`. Behind a reverse
+and restart only the web container: `./run.sh compose up -d --force-recreate --no-deps web`. Behind a reverse
 proxy that rewrites `Host`, make sure it sends `X-Forwarded-Host` (the check prefers it).
 
 Behind HTTPS, terminate TLS in a reverse proxy (nginx, Caddy, Traefik) that forwards `Host` and
@@ -385,8 +403,8 @@ s=SessionLocal(); u=s.query(User).filter_by(email='YOU@example.com').one(); u.pa
 ### Backups
 
 ```sh
-./scripts/compose.sh exec -T db pg_dump -U grader grader > backup.sql   # all grades, rubrics, the users cache
-./scripts/compose.sh exec -T db pg_dump -U grader lldap > lldap.sql     # sso: the people, passwords (hashed) and group memberships
+./run.sh compose exec -T db pg_dump -U grader grader > backup.sql   # all grades, rubrics, the users cache
+./run.sh compose exec -T db pg_dump -U grader lldap > lldap.sql     # sso: the people, passwords (hashed) and group memberships
 docker run --rm -v papergrader_storage:/data -v "$PWD":/out docker.io/library/alpine \
   tar czf /out/storage.tgz -C /data .                                 # PDFs and page images
 ```
@@ -537,6 +555,7 @@ the repository yet; see [libraries.md](libraries.md#testing-and-quality).
 | Browser: "can't connect" to `<DOMAIN>:5904` | The hosts-file line is missing on that machine, or the gateway is down (`./run.sh status`: `caddy`, `tinyauth`, `lldap` must be up) |
 | Browser: certificate warning, or "invalid signature" | The certificate is self-signed: accept it for each of `<DOMAIN>`, `auth.<DOMAIN>` and `lldap.<DOMAIN>`. A *signature* error means the browser cached another CA with the same name (an old Caddy install): remove "Caddy Local Authority" from its certificate manager |
 | LLDAP page: "Error trying to fetch users [401]: Invalid JWT" | Another LLDAP on the same domain (an old gateway project) left a login cookie that this one can't verify, because cookies ignore ports. Clear cookies for the domain, stop the old stack, or use another `--domain` |
+| An edit, assignment or delete returns an empty 403, or a rubric/feedback with code in it is refused | The WAF blocked it. It should not happen for the cases in `scripts/waf-probe.py` (run it: `.venv/bin/python scripts/waf-probe.py`); otherwise see the rule id as in the next row and add a narrow exclusion |
 | LLDAP: "Error trying to initiate adding the user to a group [403]", or any empty 403 from `https://…:5904` | The WAF (Coraza + OWASP CRS) blocked the request. Find the rule: `./run.sh logs caddy \| grep "Coraza: Warning"` shows the rule id and what matched. Add the narrowest exclusion to `gateway/Caddyfile` (one rule id, one field, one path, as for ids 10001 and 10002 there), then `./run.sh up` |
 | `lldap.<DOMAIN>` shows "User management is for administrators only." (403) | You are signed in as a user that is not in `LLDAP_ADMIN_USERS`. Add the id to `.env` (`admin\|alice`, every LLDAP admin account) and `./run.sh up`, or sign in as `admin` |
 | "Your account is not enrolled in Paper Grader" (403 page) | The person is in LDAP but in neither group. Add them to `papergrader_tas` or `papergrader_admins` in LLDAP; it applies within about 30 seconds |
@@ -544,4 +563,5 @@ the repository yet; see [libraries.md](libraries.md#testing-and-quality).
 | "The user directory is unavailable" (503) | The app can't reach LLDAP: `./run.sh logs lldap`; check `LDAP_OBSERVER_PASSWORD` matches (it is applied by `lldap-bootstrap` on every `up`) |
 | `./run.sh up` stalls with `lldap-bootstrap`, `tinyauth`, `caddy` at "Created" | They wait for `lldap` to be *healthy*. Check `./run.sh logs lldap` (Postgres reachable? `lldap-db-init` exited 0?) |
 | Someone's password: "I can't sign in after migrating" | Migrated accounts have **no password**. Set one in LLDAP (Users, the person, Modify password), or whitelist their email for Google sign-in |
-| Error "missing networks" / "profile" from podman-compose | Use `./run.sh` or `./scripts/compose.sh`, which pass the right `--profile`; a plain `podman-compose` call sees only the services without a profile |
+| After a reboot or `podman restart`: `Starting some container dependencies … the following dependencies of container … are not running: … container state improper` | The containers were created by an older version in which `tinyauth`, `lldap` and `caddy` were tied (`--requires`) to the one-shot `lldap-db-init` / `lldap-bootstrap`, which have exited, so Podman can't restart them. Fix: `./run.sh down && ./run.sh up` (data stays in the volumes). The current compose file has no such dependency and `up` runs the one-shots first, so it doesn't recur |
+| Error "missing networks" / "profile" from podman-compose | Use `./run.sh` (or `./run.sh compose <args>` for anything else), which passes the right `--profile`; a plain `podman-compose` call sees only the services without a profile |

@@ -67,6 +67,8 @@ and the CSVs for every import mode (`scripts/make-sample-data.py` regenerates it
 | `./run.sh status`, `logs [service]` | `podman-compose ps`, follow logs (e.g. `logs caddy`, `logs lldap`) |
 | `./run.sh login` | sign Claude in once (`claude-login.sh`) |
 | `./run.sh migrate` | **manual, never part of `up`**: copy the users of an older install into LLDAP ([below](#moving-users-from-an-older-install)) |
+| `./run.sh caddy FILE` | put a new Caddyfile into the running gateway and reload it, no rebuild (`--show`, `--revert`; [details](docs/how-it-runs.md#changing-the-gateways-caddyfile-on-a-live-server)) |
+| `./run.sh compose ARGS` | any `podman-compose` command for this project with the right profile, e.g. `./run.sh compose exec -T db psql -U grader grader` |
 | `./run.sh env` | where `.env` is, the sign-in mode, the admin email |
 
 Options (first run only; they are stored in `.env`): `--domain D` (sso base domain), `--admin-email E`, `--https-port P` (default 5904),

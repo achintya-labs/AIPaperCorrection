@@ -99,21 +99,24 @@ unanchored `storage/` also hides the `api/app/storage` Python package, which pas
 | **Compose and workflows** | `docker compose config` parses with both profiles (`sso`, `local`) and with published images; the sso profile publishes **exactly one** host port; `run.sh` and `scripts/*.sh` parse; `actionlint` on the workflows |
 | **Image builds** (pull requests only) | Builds the `api`, `web`, `claude` and `gateway` Dockerfiles without pushing, so a broken Dockerfile fails before merge |
 
+`scripts/waf-probe.py` sends realistic API requests (every endpoint: JSON edits with PUT/PATCH/DELETE, rubrics and feedback full of code, 14 to 100 MB multipart uploads, long ID lists, 1800 random session cookies) through the real `(waf)` snippet of `gateway/Caddyfile` in a throwaway container and lists any that are blocked, with the rule id; it also checks that XSS/SQLi in a URL, attack-like names and error text in an HTML response still are. Run it after changing the Caddyfile or the API. It needs podman and the built gateway image.
+
 Not covered by CI: the gateway itself (Caddy/Coraza rules, Tinyauth, LLDAP, the self-signed certificate) needs real containers. After changing
 `gateway/Caddyfile`, `docker-compose.yml` or `run.sh`, start the stack (`./run.sh up`) and walk through the checks in
 [how-it-runs.md](how-it-runs.md#first-run-checklist); the sign-in flow is diagrammed in [workflows.md](workflows.md#9-signing-in-with-the-gateway-sso).
 
 ### Compose profiles and the two sign-in modes
 
-`docker-compose.yml` puts services behind profiles: `sso` (`caddy`, `tinyauth`, `lldap`, `lldap-db-init`, `lldap-bootstrap`), `local` (the nginx
-`proxy`) and `migrate` (`lldap-import`, run only by `./run.sh migrate`). `run.sh` and `scripts/compose.sh` add `--profile $AUTH_MODE`; a plain
+`docker-compose.yml` puts services behind profiles: `sso` (`caddy`, `tinyauth`, `lldap`), `local` (the nginx
+`proxy`), `setup` (the one-shots `lldap-db-init` and `lldap-bootstrap`, run with `--rm` by `./run.sh up` *before* the sso services) and `migrate` (`lldap-import`, run only by `./run.sh migrate`).
+Long-running services must never `depends_on` a one-shot: Podman records that as `--requires`, and after a reboot it then refuses to restart the service (`dependencies … are not running: container state improper`). `run.sh` and `scripts/compose.sh` add `--profile $AUTH_MODE`; a plain
 `podman-compose` call without a profile starts only `db`, `claude`, `api`, `worker` and `web`. For development without the gateway use
 `AUTH_MODE=local` (`./run.sh --auth-mode local`, or the uvicorn recipe in [how-it-runs.md](how-it-runs.md#local-development-without-containers)).
 
 ## Publishing images
 
 `.github/workflows/release.yml` runs the whole CI first (`uses: ./.github/workflows/ci.yml`) and **only then** builds
-and pushes `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
+and pushes `linux/amd64` images to GitHub Container Registry (**amd64 only**: the images do not run on arm64 hosts such as Raspberry Pi or Apple-silicon Linux VMs):
 
 | Image | Built from | Notes |
 |---|---|---|
@@ -121,6 +124,13 @@ and pushes `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
 | `ghcr.io/<owner>/<repo>/web` | `web/Dockerfile` | Hostnames are configured at runtime (`ALLOWED_HOSTS`), nothing is baked in |
 | `ghcr.io/<owner>/<repo>/claude` | `claude/Dockerfile` | Contains the Claude Code CLI, installed unpinned |
 | `ghcr.io/<owner>/<repo>/gateway` | `gateway/Dockerfile` | Caddy with the Coraza WAF module and the Caddyfile (sso front door) |
+
+**Why a release takes the time it does.** The four images build in parallel and the slowest one sets the total. Each is built for `linux/amd64` only.
+Building `arm64` as well ran under QEMU emulation on an x86 runner, which made compiling Caddy with the Coraza WAF module take ~20 minutes
+(a release went from ~8 to ~22 minutes when the gateway was added), so it was dropped; `gateway/Dockerfile` still cross-compiles
+(`--platform=$BUILDPLATFORM` plus `GOOS/GOARCH`), so adding `linux/arm64` back to `platforms:` in `release.yml` (and a `docker/setup-qemu-action` step for the other images)
+costs little for the gateway. Every image uses a GitHub Actions layer cache between releases, and the `claude` image installs the unpinned Claude Code CLI as its last layer with a
+`CLI_REV` build argument (the run id) so the CLI is refreshed on every release while the apt and pip layers stay cached.
 
 Publishing happens **only when you push a tag that starts with `v`**. Nothing is published from branches or pull requests.
 

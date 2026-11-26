@@ -103,7 +103,7 @@ jobs:
           cp .env.example .env
           sed -i 's/^CLAUDE_RUNNER_TOKEN=$/CLAUDE_RUNNER_TOKEN=ci-token/' .env
           # Both modes: the sso gateway services and the local nginx proxy sit behind compose profiles.
-          docker compose --profile sso --profile local config -q
+          docker compose --profile sso --profile local --profile setup --profile migrate config -q
           docker compose --profile sso config --services | grep -qx caddy
           docker compose --profile local config --services | grep -qx proxy
           # sso publishes exactly one host port (the gateway); the app, api and db publish none.
