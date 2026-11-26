@@ -38,13 +38,16 @@ export default function ExamAdmin({ id }: { id: number }) {
   };
 
   useEffect(() => {
+    let alive = true;
     api<Exam[]>("/exams")
       .then((list) => {
+        if (!alive) return;
         const e = list.find((x) => x.id === id);
         if (!e) return setError("Exam not found");
         setExam(e); setModel(e.model_override ?? ""); setName(e.name);
       })
-      .catch((e) => setError(errMsg(e)));
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    return () => { alive = false; };
   }, [id]);
 
   async function saveModel() {

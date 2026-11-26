@@ -12,29 +12,35 @@ export default function Exams() {
   const [q, setQ] = useState("");
   const [ok, setOk] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [grader, setGrader] = useState<{ provider?: string; ready: boolean; detail?: string } | null>(null);
 
   const load = () => api<Exam[]>("/exams").then(setExams).catch((e) => setError(errMsg(e)));
-  useEffect(() => { load(); }, []);
   useEffect(() => {
-    api<{ provider?: string; ready: boolean; detail?: string }>("/grader/status").then(setGrader).catch(() => setGrader(null));
+    let alive = true;
+    api<Exam[]>("/exams").then((x) => { if (alive) setExams(x); }).catch((e) => { if (alive) setError(errMsg(e)); });
+    api<{ provider?: string; ready: boolean; detail?: string }>("/grader/status")
+      .then((g) => { if (alive) setGrader(g); })
+      .catch(() => { if (alive) setGrader(null); });
+    return () => { alive = false; };
   }, []);
 
   async function remove(x: Exam) {
-    setError(""); setOk("");
+    setError(""); setOk(""); setBusy(true);
     try {
       if (await deleteExamFlow(x)) { setOk(`Deleted “${x.name}”.`); await load(); }
-    } catch (err) { setError(errMsg(err)); }
+    } catch (err) { setError(errMsg(err)); } finally { setBusy(false); }
   }
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    setError(""); setBusy(true);
     try {
       const exam = await api<Exam>("/exams", { method: "POST", json: { name } });
       window.location.href = `/admin/exams/${exam.id}`;
     } catch (err) {
       setError(errMsg(err));
+      setBusy(false);
     }
   }
 
@@ -56,7 +62,7 @@ export default function Exams() {
           <label htmlFor="exam-name">New exam</label>
           <input id="exam-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Physics 101 midterm" required />
         </div>
-        <button className="primary" style={{ alignSelf: "flex-end" }}>Create</button>
+        <button className="primary" disabled={busy} style={{ alignSelf: "flex-end" }}>{busy ? "Creating…" : "Create"}</button>
       </form>
       {exams && exams.length > 0 && (
         <SearchBox value={q} onChange={setQ} label="Search exams" placeholder="Search exams"
@@ -75,7 +81,7 @@ export default function Exams() {
                 <tr key={x.id}>
                   <td>{x.name}</td>
                   <td className="mono small">{x.model_override ?? <span className="muted">default</span>}</td>
-                  <td><div className="row"><a className="btn" href={`/admin/exams/${x.id}`}>Manage</a><button className="danger" onClick={() => remove(x)}>Delete</button></div></td>
+                  <td><div className="row"><a className="btn" href={`/admin/exams/${x.id}`}>Manage</a><button type="button" className="danger" disabled={busy} onClick={() => remove(x)}>Delete</button></div></td>
                 </tr>
               ))}
             </tbody>

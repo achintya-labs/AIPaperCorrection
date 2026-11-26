@@ -10,6 +10,17 @@ class AnthropicApiProvider(GraderProvider):
 
     name = "anthropic_api"
 
+    def status(self) -> dict:
+        return {"provider": self.name, "ready": False, "plan_quota": False, "detail": "Not implemented yet"}
+
+    def usage(self) -> dict:
+        import os
+        from app.grader.usage import probe_api_key
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            raise GraderError("ANTHROPIC_API_KEY is not set")
+        return probe_api_key(key)
+
     def _attempt(
         self, pages: list[PageImage], rubric: RubricSpec, model: str, feedback: str | None
     ) -> GradingOutcome:

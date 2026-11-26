@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useDismiss } from "../lib/uiHelpers";
 
 export type SelectOption<T extends string> = { value: T; label: string };
 
@@ -22,28 +23,45 @@ export default function SelectMenu<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, boxRef, close, triggerRef);
 
   const label = options.find((o) => o.value === value)?.label ?? value;
+
+  function focusOption(index: number) {
+    const items = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+    if (!items?.length) return;
+    const clamped = ((index % items.length) + items.length) % items.length;
+    items[clamped]?.focus();
+  }
+
+  function onTriggerKeyDown(e: React.KeyboardEvent) {
+    if (disabled) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) setOpen(true);
+      const cur = Math.max(0, options.findIndex((o) => o.value === value));
+      setTimeout(() => focusOption(cur), 0);
+    }
+  }
+
+  function onListKeyDown(e: React.KeyboardEvent) {
+    const items = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
+    if (!items.length) return;
+    const idx = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); focusOption(idx + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); focusOption(idx <= 0 ? items.length - 1 : idx - 1); }
+    else if (e.key === "Home") { e.preventDefault(); focusOption(0); }
+    else if (e.key === "End") { e.preventDefault(); focusOption(items.length - 1); }
+  }
 
   return (
     <div ref={boxRef} style={{ position: "relative", minWidth }}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
         aria-expanded={open}
@@ -51,43 +69,25 @@ export default function SelectMenu<T extends string>({
         disabled={disabled}
         title={title}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onTriggerKeyDown}
         style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".5rem" }}
       >
-        <span>{label}</span>
-        <span className="small muted">{open ? "▲" : "▼"}</span>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        <span className="small muted" style={{ flex: "none" }}>{open ? "▲" : "▼"}</span>
       </button>
       {open && (
-        <div
-          role="listbox"
-          className="card stack"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            right: 0,
-            minWidth,
-            zIndex: 30,
-            padding: ".35rem",
-            gap: ".2rem",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
-          }}
-        >
+        <div ref={listRef} role="listbox" className="card menu" style={{ minWidth }} onKeyDown={onListKeyDown}>
           {options.map((o) => (
             <button
               key={o.value}
               type="button"
               role="option"
               aria-selected={o.value === value}
+              className="menu-option"
               onClick={() => {
                 setOpen(false);
                 if (o.value !== value) onChange(o.value);
-              }}
-              style={{
-                textAlign: "left",
-                border: 0,
-                background: o.value === value ? "var(--info-bg)" : "transparent",
-                color: o.value === value ? "var(--info)" : "var(--text)",
-                fontWeight: o.value === value ? 600 : 400,
+                triggerRef.current?.focus();
               }}
             >
               {o.label}

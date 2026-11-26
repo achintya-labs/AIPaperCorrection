@@ -26,17 +26,20 @@ export default function Users() {
   const [ok, setOk] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<{ id: number; value: string; generated: boolean } | null>(null);
 
   const load = () => api<UserAdmin[]>("/auth/users").then(setUsers).catch((e) => setError(errMsg(e)));
   useEffect(() => {
-    load();
-    api<User>("/auth/me").then(setMe).catch(() => {});
+    let alive = true;
+    api<UserAdmin[]>("/auth/users").then((u) => { if (alive) setUsers(u); }).catch((e) => { if (alive) setError(errMsg(e)); });
+    api<User>("/auth/me").then((m) => { if (alive) setMe(m); }).catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
-    setError(""); setOk("");
+    setError(""); setOk(""); setCreating(true);
     try {
       await api("/auth/users", { method: "POST", json: form });
       setOk(
@@ -48,8 +51,8 @@ export default function Users() {
       );
       setForm({ email: "", name: "", password: "", role: "ta" });
       setGeneratedPw(false);
-      load();
-    } catch (err) { setError(errMsg(err)); }
+      await load();
+    } catch (err) { setError(errMsg(err)); } finally { setCreating(false); }
   }
 
   async function patch(u: UserAdmin, body: { role?: Role; active?: boolean; name?: string }, done: string) {
@@ -133,11 +136,11 @@ export default function Users() {
 
   return (
     <div className="stack">
-      <h1>Users</h1>
+      <h2 style={{ margin: 0 }}>Users</h2>
       {error && <Alert tone="bad">{error}</Alert>}
       {ok && <Alert tone="ok">{ok}</Alert>}
       <form className="card" onSubmit={create}>
-        <h2>Add a user</h2>
+        <h3>Add a user</h3>
         <div className="grid2">
           <div className="field"><label htmlFor="u-email">Email</label><input id="u-email" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
           <div className="field"><label htmlFor="u-name">Name</label><input id="u-name" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
@@ -149,17 +152,17 @@ export default function Users() {
               <button type="button" onClick={() => { setForm({ ...form, password: generatePassword() }); setGeneratedPw(true); }}>Generate</button>
             </div>
           </div>
-          <div className="field"><label>Role</label>
+          <div className="field"><span className="field-label">Role</span>
             <RoleSelect ariaLabel="Role for new user" value={form.role} onChange={(role) => setForm({ ...form, role })} />
           </div>
         </div>
-        <button className="primary">Create user</button>
+        <button className="primary" disabled={creating}>{creating ? "Creating…" : "Create user"}</button>
       </form>
       {users && users.length > 0 && (
         <SearchBox value={q} onChange={setQ} label="Search users" placeholder="Search email, name, role, status"
           shown={visible.length} total={users.length} />
       )}
-      <div className="card" style={{ padding: 0, overflow: "visible" }}>
+      <div className="card table-card has-menu">
         {!users ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : visible.length === 0 ? (
           <NoMatches query={q} onClear={() => setQ("")} />
         ) : (

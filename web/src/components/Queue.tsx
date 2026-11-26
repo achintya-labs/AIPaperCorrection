@@ -4,6 +4,7 @@ import type { Exam, Submission, SubmissionStatus, UserAdmin } from "../lib/types
 import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
+import SelectMenu from "./SelectMenu";
 
 const STATUSES: SubmissionStatus[] = ["ready_for_review", "reviewed", "queued", "grading", "uploaded", "failed"];
 
@@ -27,13 +28,15 @@ export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
   const [q, setQ] = useState("");
 
   useEffect(() => {
+    let alive = true;
     Promise.all([
       api<Submission[]>("/submissions"),
       api<Exam[]>("/exams"),
       isAdmin ? api<UserAdmin[]>("/auth/users").catch(() => []) : Promise.resolve([]),
     ])
-      .then(([s, e, u]) => { setSubs(s); setExams(e); setTas(u); })
-      .catch((e) => setError(errMsg(e)));
+      .then(([s, e, u]) => { if (alive) { setSubs(s); setExams(e); setTas(u); } })
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    return () => { alive = false; };
   }, [isAdmin]);
 
   const examName = (id: number) => exams.find((e) => e.id === id)?.name ?? `Exam ${id}`;
@@ -73,18 +76,14 @@ export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
         <SearchBox value={q} onChange={setQ} label="Search papers" placeholder="Search student, name, exam, status"
           shown={shown.length} total={subs.length} />
         <div>
-          <label htmlFor="f-exam">Exam</label>
-          <select id="f-exam" value={examId} onChange={(e) => setExamId(e.target.value)}>
-            <option value="">All exams</option>
-            {exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
+          <span className="field-label">Exam</span>
+          <SelectMenu ariaLabel="Exam" value={examId} onChange={setExamId} minWidth={170}
+            options={[{ value: "", label: "All exams" }, ...exams.map((e) => ({ value: String(e.id), label: e.name }))]} />
         </div>
         <div>
-          <label htmlFor="f-status">Status</label>
-          <select id="f-status" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All</option>
-            {STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-          </select>
+          <span className="field-label">Status</span>
+          <SelectMenu ariaLabel="Status" value={status} onChange={setStatus} minWidth={150}
+            options={[{ value: "", label: "All" }, ...STATUSES.map((s) => ({ value: s as string, label: s.replace(/_/g, " ") }))]} />
         </div>
       </div>
       <div className="card table-card">
@@ -102,7 +101,7 @@ export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
                     <strong>{s.student.external_id}</strong>
                     {s.student.name && <div className="muted small">{s.student.name}</div>}
                   </td>
-                  <td>{examName(s.exam_id)}</td>
+                  <td className="wrap" style={{ minWidth: 120, maxWidth: 260 }}>{examName(s.exam_id)}</td>
                   <td><StatusBadge status={s.status} /></td>
                   {isAdmin && (
                     <td className="tas-cell">

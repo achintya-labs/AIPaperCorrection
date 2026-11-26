@@ -186,13 +186,16 @@ def test_local_status(auth_script, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")  # an API key counts as authenticated
     assert LocalExecutor(auth_script(False)).status()["ready"] is True
     assert LocalExecutor("/nonexistent/claude").status()["ready"] is False
+    assert LocalExecutor(auth_script(True)).status()["plan_quota"] is False  # ANTHROPIC_API_KEY is set here
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert LocalExecutor(auth_script(True)).status()["plan_quota"] is True
 
 
 def test_status_through_runner(tmp_path, auth_script, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     http = TestClient(create_app(executor=LocalExecutor(auth_script(False)), token=TOKEN))
     provider = ClaudeCliProvider(executor=RemoteExecutor("http://r", TOKEN, client=http), name="claude_runner")
-    assert provider.status() == {"provider": "claude_runner", "ready": False, "auth_method": "claude.ai", "detail": "Not logged in"}
+    assert provider.status() == {"provider": "claude_runner", "ready": False, "auth_method": "claude.ai", "plan_quota": True, "detail": "Not logged in"}
     bad = ClaudeCliProvider(executor=RemoteExecutor("http://r", "wrong", client=http))
     assert bad.status()["ready"] is False and "rejected" in bad.status()["detail"]
 

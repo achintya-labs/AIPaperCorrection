@@ -6,6 +6,7 @@ export default function DialogHost() {
   const [queue, setQueue] = useState<DialogRequest[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const current = queue[0];
+  const formRef = useRef<HTMLFormElement>(null);
   const firstRef = useRef<HTMLInputElement>(null);
   const okRef = useRef<HTMLButtonElement>(null);
 
@@ -16,7 +17,24 @@ export default function DialogHost() {
     setValues(Object.fromEntries((current.fields ?? []).map((f) => [f.name, f.value ?? ""])));
     // Focus the first field (select its text), or the confirm button.
     const t = setTimeout(() => { if (firstRef.current) { firstRef.current.focus(); firstRef.current.select(); } else okRef.current?.focus(); }, 0);
-    return () => clearTimeout(t);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && current.cancelLabel !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        current.resolve((current.fields ?? []).length ? null : false);
+        setQueue((q) => q.slice(1));
+      } else if (e.key === "Tab" && formRef.current) {
+        const focusable = Array.from(
+          formRef.current.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex="-1"])'),
+        );
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => { clearTimeout(t); document.removeEventListener("keydown", onKey, true); };
   }, [current]);
 
   if (!current) return null;
@@ -36,12 +54,12 @@ export default function DialogHost() {
   return (
     <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && current.cancelLabel !== null) cancel(); }}>
       <form
+        ref={formRef}
         className="card dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
         onSubmit={(e) => { e.preventDefault(); submit(); }}
-        onKeyDown={(e) => { if (e.key === "Escape" && current.cancelLabel !== null) { e.preventDefault(); cancel(); } }}
       >
         <h3 id="dialog-title" style={{ margin: 0 }}>{current.title ?? (fields.length ? "Edit" : "Please confirm")}</h3>
         {current.message && <p className="dialog-message">{current.message}</p>}

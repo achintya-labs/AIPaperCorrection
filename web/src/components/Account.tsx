@@ -12,7 +12,11 @@ export default function Account() {
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api<User>("/auth/me").then(setMe).catch(() => {}); }, []);
+  useEffect(() => {
+    let alive = true;
+    api<User>("/auth/me").then((u) => { if (alive) setMe(u); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Cheap checks before a round trip; the server enforces the real rules.
   const problem =

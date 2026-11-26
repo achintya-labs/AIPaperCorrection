@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { User } from "../lib/types";
 import { matchesQuery } from "../lib/search";
+import { useDismiss } from "../lib/uiHelpers";
 import { Person } from "./ui";
 
 export default function TaMultiSelect({
@@ -15,22 +16,13 @@ export default function TaMultiSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, []);
+  useDismiss(open, boxRef, close, triggerRef);
 
   if (tas.length === 0) return <span className="small muted">No active TAs</span>;
 
@@ -44,8 +36,9 @@ export default function TaMultiSelect({
   return (
     <div ref={boxRef} style={{ position: "relative" }}>
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? close() : setOpen(true))}
         aria-expanded={open}
         className="multiselect-trigger"
       >
@@ -53,20 +46,7 @@ export default function TaMultiSelect({
         <span className="small muted">{open ? "▲" : "▼"}</span>
       </button>
       {open && (
-        <div
-          className="card stack"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            right: 0,
-            minWidth: 240,
-            zIndex: 30,
-            padding: ".5rem",
-            gap: ".4rem",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
-          }}
-        >
+        <div className="card menu" style={{ minWidth: 260 }}>
           <input
             type="search"
             value={query}
@@ -74,12 +54,12 @@ export default function TaMultiSelect({
             placeholder="Search TAs…"
             autoFocus
           />
-          <div style={{ maxHeight: 200, overflowY: "auto", display: "grid", gap: ".25rem" }}>
+          <div style={{ display: "grid", gap: ".2rem" }}>
             {filtered.length === 0 ? (
               <span className="small muted">No matching TAs</span>
             ) : (
               filtered.map((t) => (
-                <label key={t.id} className="check multiselect-option">
+                <label key={t.id} className={`check multiselect-option${selected.includes(t.id) ? " selected" : ""}`}>
                   <input
                     type="checkbox"
                     checked={selected.includes(t.id)}

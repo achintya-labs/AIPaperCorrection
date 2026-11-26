@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_admin
 from app.db import get_db
-from app.grader import get_provider
+from app.grader import GraderError, get_provider
 from app.models import Exam, Grade, GradeStatus, Rubric, Submission, SubmissionStatus
 
 router = APIRouter(tags=["grading"], dependencies=[Depends(require_admin)])
@@ -111,6 +111,34 @@ def regrade(submission_id: int, body: RegradeIn, db: Session = Depends(get_db)):
     sub.error = None
     db.commit()
     return QueueResult(queued=1)
+
+
+class UsageWindow(BaseModel):
+    key: str
+    label: str
+    used_percent: float | None  # 0-100; null when only a status is known
+    resets_at: str | None  # ISO-8601
+    status: str | None  # allowed | allowed_warning | rejected
+    detail: str | None = None
+
+
+class UsageOut(BaseModel):
+    source: str  # "subscription" (plan limits: session + weekly) or "api_key" (per-minute API limits)
+    model: str
+    checked_at: str
+    windows: list[UsageWindow]
+
+
+@router.post("/grader/usage", response_model=UsageOut)
+def grader_usage():
+    """Check the remaining quota now. Sends one tiny Haiku request (through the runner), so it is a POST and the UI
+    only calls it when an admin presses the button."""
+    try:
+        return get_provider().usage()
+    except GraderError as e:
+        raise HTTPException(502, str(e))
+    except ValueError as e:  # misconfiguration, as for /grader/status
+        raise HTTPException(502, str(e))
 
 
 @router.get("/grader/status")

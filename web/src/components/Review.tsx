@@ -22,16 +22,21 @@ export default function Review({ id }: { id: number }) {
   // Per-grade notice, e.g. "changed by someone else".
   const [notes, setNotes] = useState<Record<number, { tone: "bad" | "warn" | "ok"; text: string }>>({});
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isAlive: () => boolean = () => true) => {
     try {
       const d = await api<SubmissionDetail>(`/submissions/${id}/detail`);
+      if (!isAlive()) return;
       setDetail(d);
       setDrafts(Object.fromEntries(d.grades.map((g) => [g.id, baseline(g)])));
     } catch (e) {
-      setError(errMsg(e));
+      if (isAlive()) setError(errMsg(e));
     }
   }, [id]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let alive = true;
+    load(() => alive);
+    return () => { alive = false; };
+  }, [load]);
 
   // A new page starts at its top, not wherever the previous one was scrolled to.
   const sheetRef = useRef<HTMLDivElement>(null);
@@ -109,9 +114,13 @@ export default function Review({ id }: { id: number }) {
       setDrafts((all) => ({ ...all, [g.id]: baseline(updated) }));
       setNotes((n) => ({ ...n, [g.id]: { tone: "ok", text: updated.status === "reviewed" ? "Approved" : "Saved your changes" } }));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && (e.detail as any)?.current) {
+      const conflictCurrent =
+        e instanceof ApiError && e.status === 409 && typeof e.detail === "object" && e.detail !== null && "current" in e.detail
+          ? (e.detail as { current?: Grade }).current
+          : undefined;
+      if (conflictCurrent) {
         // Take the new version so the next save is deliberate, but keep the user's draft text.
-        const cur = (e.detail as any).current as Grade;
+        const cur = conflictCurrent;
         replaceGrade(cur);
         setNotes((n) => ({
           ...n,

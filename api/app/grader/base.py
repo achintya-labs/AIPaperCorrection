@@ -213,6 +213,10 @@ class GraderProvider(ABC):
         """Readiness for the admin UI (e.g. "is Claude logged in?"). Providers override when useful."""
         return {"provider": self.name, "ready": True}
 
+    def usage(self) -> dict:
+        """How much of the plan / API rate limit is used (see grader/usage.py for the shape). Costs one tiny request."""
+        raise GraderError(f"The {self.name} provider can't report quota")
+
     @abstractmethod
     def _attempt(
         self,

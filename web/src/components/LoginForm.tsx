@@ -11,8 +11,10 @@ export default function LoginForm() {
   const [google, setGoogle] = useState(false);
 
   useEffect(() => {
+    let alive = true;
     setError(loginErrorMessage(new URLSearchParams(window.location.search).get("error")));
-    api<{ google: boolean }>("/auth/providers").then((p) => setGoogle(p.google)).catch(() => {});
+    api<{ google: boolean }>("/auth/providers").then((p) => { if (alive) setGoogle(p.google); }).catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   async function submit(e: React.FormEvent) {

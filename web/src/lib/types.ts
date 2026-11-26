@@ -85,3 +85,18 @@ export interface AutoSplitResult {
   splits: ProposedSplit[];
   existing_student_ids: string[];
 }
+
+export interface UsageWindow {
+  key: string;
+  label: string;
+  used_percent: number | null; // 0-100
+  resets_at: string | null; // ISO-8601
+  status: string | null; // allowed | allowed_warning | rejected
+  detail: string | null;
+}
+export interface Usage {
+  source: "subscription" | "api_key";
+  model: string;
+  checked_at: string;
+  windows: UsageWindow[];
+}

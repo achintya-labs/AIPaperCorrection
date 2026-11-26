@@ -458,10 +458,34 @@ Papers already `queued`/`grading` are skipped, as are papers with TA-reviewed gr
 Is the grading backend usable? **200** always:
 
 ```json
-{"provider": "claude_runner", "ready": false, "auth_method": "none", "detail": "Not logged in"}
+{"provider": "claude_runner", "ready": false, "auth_method": "none", "plan_quota": true, "detail": "Not logged in"}
 ```
 
+`plan_quota` is `false` when the backend authenticates with an API key (`ANTHROPIC_API_KEY`): an API key has per-minute rate
+limits but no Claude plan quota, so the Admin page hides its **Models** section.
+
 On misconfiguration (e.g. missing runner token) it returns `{"ready": false, "detail": "…"}`.
+
+### `POST /grader/usage`
+Admin. **Checks the remaining quota now** by sending one tiny, tool-less Haiku request through the grading backend (so it
+uses a sliver of quota, hence `POST`; the web UI calls it only when an admin presses *Check quota* on the Admin page).
+**200** → `UsageOut`:
+
+```json
+{"source": "subscription", "model": "haiku", "checked_at": "2030-01-01T12:00:00+00:00",
+ "windows": [
+   {"key": "five_hour", "label": "Session (5-hour)", "used_percent": 23.5, "resets_at": "2030-01-01T17:00:00+00:00", "status": "allowed", "detail": null},
+   {"key": "seven_day", "label": "Weekly (7-day)",   "used_percent": 41.0, "resets_at": "2030-01-04T09:00:00+00:00", "status": "allowed", "detail": null}]}
+```
+
+- `source: "subscription"` (a Claude Pro/Max login): the plan's **session (5-hour)** and **weekly (7-day)** limits, read from
+  the `rate_limit_event` messages the Claude CLI prints. Some plans also report per-model weekly windows (Opus, Sonnet).
+- `source: "api_key"` (`ANTHROPIC_API_KEY` set in the `claude` container, or `GRADER_PROVIDER=anthropic_api`): there are no plan
+  windows. One 1-token Messages API call returns the `anthropic-ratelimit-*` headers, shown as **requests**, **tokens**,
+  **input tokens** and **output tokens per minute**, with `detail` like `"45 of 50 left"` and `resets_at` from the header.
+- `used_percent` is 0-100, or `null` if only `status` is known. `status` is `allowed`, `allowed_warning` or `rejected`.
+
+**502** if the check can't run (not signed in, API key rejected, runner unreachable, no limit information returned).
 
 ---
 
@@ -585,6 +609,7 @@ has no OpenAPI/Swagger. Auth is `Authorization: Bearer <CLAUDE_RUNNER_TOKEN>`; i
 |---|---|---|
 | `GET /health` | none | Liveness |
 | `GET /status` | bearer | `{"ready": bool, "auth_method": …, "detail": …}` from `claude auth status` |
+| `POST /usage` | bearer | One tiny Haiku request that reports the plan's (or API key's) rate limits; same body as `POST /grader/usage` |
 | `POST /run` | bearer | Run `claude -p` on the supplied pages and prompt |
 
 `POST /run` (`multipart/form-data`):

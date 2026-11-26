@@ -16,6 +16,10 @@ class FakeProvider(GraderProvider):
 
     name = "fake"
 
+    def usage(self) -> dict:
+        from app.grader.usage import sample
+        return sample()
+
     def _attempt(
         self, pages: list[PageImage], rubric: RubricSpec, model: str, feedback: str | None
     ) -> GradingOutcome:

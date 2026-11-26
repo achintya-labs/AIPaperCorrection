@@ -27,7 +27,7 @@ const path = Astro.url.pathname;
           {user.role === "admin" && (
             <>
               <a href="/admin/exams" aria-current={path.startsWith("/admin/exams") ? "page" : undefined}>Exams</a>
-              <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Users</a>
+              <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Admin</a>
             </>
           )}
         </nav>

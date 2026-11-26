@@ -53,6 +53,14 @@ def create_app(
     def status():
         return executor.status()
 
+    @app.post("/usage", dependencies=[Depends(authed)])
+    def usage():
+        """One tiny Haiku request that reports the plan's (or API key's) rate limits. Not queued behind grading."""
+        try:
+            return executor.usage()
+        except GraderError as e:
+            return JSONResponse({"detail": str(e)}, status_code=502)
+
     @app.post("/run", dependencies=[Depends(authed)])
     def run(
         model: str = Form(...),

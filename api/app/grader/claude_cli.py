@@ -206,6 +206,7 @@ class ClaudeExecutor(Protocol):
         inline_images: bool = False,
     ) -> ExecResult: ...
     def status(self) -> dict: ...
+    def usage(self) -> dict: ...
 
 
 def build_command(
@@ -291,7 +292,18 @@ class LocalExecutor:
             return {"ready": False, "detail": f"Could not check Claude status: {e}"}
         # An API key in the environment authenticates without a login.
         ready = bool(info.get("loggedIn")) or bool(os.environ.get("ANTHROPIC_API_KEY"))
-        return {"ready": ready, "auth_method": info.get("authMethod"), "detail": "" if ready else "Not logged in"}
+        # plan_quota: are there Claude plan limits (session/weekly) to show? Not with an API key (per-minute limits only).
+        return {
+            "ready": ready,
+            "auth_method": info.get("authMethod"),
+            "plan_quota": not os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+            "detail": "" if ready else "Not logged in",
+        }
+
+
+    def usage(self) -> dict:
+        from app.grader.usage import probe
+        return probe(" ".join(shlex.quote(p) for p in self.claude_cmd), self.bare)
 
 
 class RemoteExecutor:
@@ -349,6 +361,9 @@ class RemoteExecutor:
         except GraderError as e:
             return {"ready": False, "detail": str(e)}
 
+    def usage(self) -> dict:
+        return self._request("POST", "/usage", timeout=120).json()
+
 
 class ClaudeCliProvider(GraderProvider):
     """Grades by running the Claude Code CLI (locally or via the runner) on the pages + rubric."""
@@ -374,6 +389,9 @@ class ClaudeCliProvider(GraderProvider):
 
     def status(self) -> dict:
         return {"provider": self.name, **self.executor.status()}
+
+    def usage(self) -> dict:
+        return self.executor.usage()
 
     @staticmethod
     def _strip_fences(text: str) -> str:

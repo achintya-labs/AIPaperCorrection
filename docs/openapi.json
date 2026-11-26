@@ -1240,6 +1240,102 @@
         "title": "SubmissionStatus",
         "type": "string"
       },
+      "UsageOut": {
+        "properties": {
+          "checked_at": {
+            "title": "Checked At",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "model",
+          "checked_at",
+          "windows"
+        ],
+        "title": "UsageOut",
+        "type": "object"
+      },
+      "UsageWindow": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resets At"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "used_percent",
+          "resets_at",
+          "status"
+        ],
+        "title": "UsageWindow",
+        "type": "object"
+      },
       "UserAdminOut": {
         "description": "What admins see when managing users: includes activity so deletion can be an informed choice.",
         "properties": {
@@ -3238,6 +3334,56 @@
           }
         },
         "summary": "Grader Status",
+        "tags": [
+          "grading"
+        ]
+      }
+    },
+    "/grader/usage": {
+      "post": {
+        "description": "Check the remaining quota now. Sends one tiny Haiku request (through the runner), so it is a POST and the UI\nonly calls it when an admin presses the button.",
+        "operationId": "grader_usage_grader_usage_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grader Usage",
         "tags": [
           "grading"
         ]

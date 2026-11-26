@@ -149,7 +149,7 @@ self-signed. Google sign-in needs a real domain name (not an IP address) in the 
 ### Sign in with Google
 
 Optional. Google only proves *who* someone is; it never creates accounts. A person can sign in with Google only if an
-admin has already created a user (Admin → Users) whose email equals their verified Google email (case-insensitive) and
+admin has already created a user (Admin page, Users section) whose email equals their verified Google email (case-insensitive) and
 the user is active. Password login keeps working next to it.
 
 1. In Google Cloud Console → APIs & Services → Credentials, create an **OAuth client ID** of type *Web application*.
@@ -212,7 +212,9 @@ docker compose logs claude             # runner requests
 curl -s localhost:8000/health          # api liveness (dev port)
 ```
 
-`GET /grader/status` (admin) reports whether the grading backend is usable.
+`GET /grader/status` (admin) reports whether the grading backend is usable. **Admin → Models → Check quota** (`POST /grader/usage`)
+shows how much of the Claude plan's session (5-hour) and weekly limits are used, as bars; with an API key it shows the per-minute
+request and token limits instead. Each check is one tiny Haiku request, and it runs only when you press the button.
 
 ### Deleting papers and exams
 
@@ -228,7 +230,7 @@ Admins can delete both, permanently:
 
 ### Searching tables
 
-Every table has a search box: **My queue**, **Exams**, **Users**, each exam's **Papers** tab, and the **import preview**.
+Every table has a search box: **My queue**, **Exams**, the **Admin** page's users, each exam's **Papers** tab, and the **import preview**.
 Type to filter as you go: every word must match (in any order), ignoring case and accents, so `ann bio` finds Ann's
 Biology paper and `jose` finds José. Press **/** to jump to the box and **Esc** to clear it; while searching it shows
 "N of M". On **My queue** it also searches the exam name and status, and combines with the Exam and Status filters.
@@ -236,7 +238,7 @@ TAs only see papers and exams assigned to them, so they only ever search within 
 
 ### Managing users
 
-Admins manage accounts on the **Users** page (or `PATCH`/`DELETE /auth/users/{id}`, see [api.md](api.md#auth)).
+Admins manage accounts on the **Admin** page (Users section) (or `PATCH`/`DELETE /auth/users/{id}`, see [api.md](api.md#auth)).
 
 - **Change role** (TA ↔ admin) and **deactivate/reactivate** take effect immediately, even for someone signed in.
 - **Deactivate** blocks sign-in and keeps their assignments and review history: the safe way to offboard a TA.
@@ -247,12 +249,12 @@ Admins manage accounts on the **Users** page (or `PATCH`/`DELETE /auth/users/{id
 
 **Passwords.** Everyone can change their own from the **Account** page (click your name in the top bar): it needs
 the current password, and signs out all your other sessions while keeping this one. Admins can reset someone else's
-from the Users page (**Reset password**, with a **Generate** button for a strong random one shown once). A reset signs
+from the Admin page (**Reset password**, with a **Generate** button for a strong random one shown once). A reset signs
 that person out everywhere. Rules everywhere: 8 or more characters, at most 72 bytes. There is no email-based
 "forgot password": the admin resets it, and if the *only* admin forgets theirs, run this in the `api` container:
 
 **Google-only accounts.** An admin may leave the password **blank** when creating a user or resetting *someone else's*
-password. That account then has no password (the Users page shows a **Google only** badge) and can sign in only with
+password. That account then has no password (the Admin page shows a **Google only** badge) and can sign in only with
 [Google](#sign-in-with-google). A blank password never signs anyone in, and nobody can blank their **own** password. To
 let a Google-only user use a password again, reset it to a real one.
 

@@ -4,12 +4,21 @@ export class ApiError extends Error {
   }
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
 function describe(detail: unknown): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
-    return detail.map((d) => (d?.loc ? `${d.loc.slice(1).join(".")}: ${d.msg}` : String(d))).join("; ");
+    return detail
+      .map((d) => {
+        if (isRecord(d) && Array.isArray(d.loc)) return `${d.loc.slice(1).join(".")}: ${String(d.msg ?? "")}`;
+        return String(d);
+      })
+      .join("; ");
   }
-  if (detail && typeof detail === "object" && "message" in detail) return String((detail as any).message);
+  if (isRecord(detail) && "message" in detail) return String(detail.message);
   return "Request failed";
 }
 
@@ -35,9 +44,9 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   }
   if (res.status === 204) return undefined as T;
   const ctype = res.headers.get("content-type") ?? "";
-  const body = ctype.includes("json") ? await res.json() : await res.text();
+  const body: unknown = ctype.includes("json") ? await res.json() : await res.text();
   if (!res.ok) {
-    const detail = typeof body === "object" && body ? (body as any).detail : body;
+    const detail = isRecord(body) && "detail" in body ? body.detail : body;
     throw new ApiError(res.status, detail, describe(detail));
   }
   return body as T;

@@ -19,15 +19,22 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [bulkTas, setBulkTas] = useState<number[]>([]);
   const [bulkMode, setBulkMode] = useState<"replace" | "add" | "remove">("add");
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(
     () => api<Submission[]>(`/submissions?exam_id=${examId}`).then(setSubs).catch((e) => setError(errMsg(e))),
     [examId],
   );
   useEffect(() => {
-    load();
-    api<UserAdmin[]>("/auth/users").then((u) => setTas(u.filter((x) => x.active && x.role === "ta"))).catch((e) => setError(errMsg(e)));
-  }, [load]);
+    let alive = true;
+    api<Submission[]>(`/submissions?exam_id=${examId}`)
+      .then((s) => { if (alive) setSubs(s); })
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    api<UserAdmin[]>("/auth/users")
+      .then((u) => { if (alive) setTas(u.filter((x) => x.active && x.role === "ta")); })
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    return () => { alive = false; };
+  }, [examId]);
 
   // Poll while anything is in flight.
   const active = subs?.some((s) => s.status === "queued" || s.status === "grading");
@@ -43,48 +50,56 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   async function queueWaiting() {
     setError(""); setInfo("");
     if (!(await confirmBox({ title: "Grade all ungraded papers?", message: "Every paper that is uploaded or failed will be sent to Claude.", confirmLabel: "Grade all" }))) return;
+    setBusy(true);
     try {
       const r = await api<{ queued: number }>(`/exams/${examId}/queue`, { method: "POST" });
       setInfo(`${r.queued} paper${r.queued === 1 ? "" : "s"} queued for grading.`);
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function regrade(s: Submission) {
     setError(""); setInfo("");
     const first = s.status === "uploaded" || s.status === "failed";
     if (!first && !(await confirmBox({ title: `Regrade ${s.student.external_id}?`, message: "Claude's grades for this paper will be replaced.", confirmLabel: "Regrade" }))) return;
+    setBusy(true);
     try {
-      await api(`/submissions/${s.id}/regrade`, { method: "POST", json: {} });
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && /force/.test(e.message)) {
-        if (!(await confirmBox({ title: "Discard TA edits?", message: "This paper has TA-reviewed grades. Regrading will DISCARD their edits.", confirmLabel: "Regrade anyway", danger: true }))) return;
-        try { await api(`/submissions/${s.id}/regrade`, { method: "POST", json: { force: true } }); }
-        catch (e2) { setError(errMsg(e2)); return; }
-      } else { setError(errMsg(e)); return; }
-    }
-    setInfo(`${s.student.external_id} queued for grading.`);
-    load();
+      try {
+        await api(`/submissions/${s.id}/regrade`, { method: "POST", json: {} });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409 && /force/.test(e.message)) {
+          if (!(await confirmBox({ title: "Discard TA edits?", message: "This paper has TA-reviewed grades. Regrading will DISCARD their edits.", confirmLabel: "Regrade anyway", danger: true }))) return;
+          await api(`/submissions/${s.id}/regrade`, { method: "POST", json: { force: true } });
+        } else {
+          throw e;
+        }
+      }
+      setInfo(`${s.student.external_id} queued for grading.`);
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function removePaper(s: Submission) {
     setError(""); setInfo("");
     const label = s.student.name ? `${s.student.external_id} (${s.student.name})` : s.student.external_id;
+    setBusy(true);
     try {
       if (await deletePaperFlow({ id: s.id, label })) {
+        setPicked((p) => { const n = new Set(p); n.delete(s.id); return n; });
         setInfo(`Deleted the paper for ${label}.`);
-        load();
+        await load();
       }
-    } catch (e) { setError(errMsg(e)); }
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function saveAssignment() {
     if (!editing) return;
+    setBusy(true);
     try {
       await api(`/submissions/${editing.id}/assignment`, { method: "PUT", json: { ta_ids: [...editing.ids] } });
       setEditing(null);
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   const toggle = (id: number, on: boolean) =>
@@ -99,6 +114,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       message: "They will be sent to Claude." + (gradedBefore ? `\n\n${gradedBefore} already graded; their Claude grades will be replaced.` : ""),
       confirmLabel: "Grade",
     }))) return;
+    setBusy(true);
     try {
       type Res = { queued: number; skipped: number };
       let r = await api<Res>(`/submissions/bulk/grade`, { method: "POST", json: { submission_ids: ids } });
@@ -112,8 +128,8 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         r = { queued: r.queued + r2.queued, skipped: r2.skipped };
       }
       setInfo(`${r.queued} paper${r.queued === 1 ? "" : "s"} queued for grading` + (r.skipped ? `, ${r.skipped} skipped (already queued, grading, or TA-reviewed).` : "."));
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function deleteSelected() {
@@ -126,6 +142,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     }))) return;
     const del = (force: boolean) =>
       api<{ deleted: number }>(`/submissions/bulk/delete`, { method: "POST", json: { submission_ids: ids, force } });
+    setBusy(true);
     try {
       let r;
       try { r = await del(false); }
@@ -136,8 +153,8 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       }
       setPicked(new Set());
       setInfo(`Deleted ${r.deleted} paper${r.deleted === 1 ? "" : "s"}.`);
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function editStudent(s: Submission) {
@@ -151,24 +168,26 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     });
     if (!v) return;
     if (v.external_id.trim() === s.student.external_id && v.name.trim() === s.student.name) return;
+    setBusy(true);
     try {
       await api(`/students/${s.student.id}`, { method: "PATCH", json: { external_id: v.external_id, name: v.name } });
       setInfo("Student updated.");
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   async function assignSelected() {
     setError(""); setInfo("");
     const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
-        if (bulkMode === "replace" && bulkTas.length === 0 && !(await confirmBox({ title: `Unassign everyone from ${ids.length} paper${ids.length === 1 ? "" : "s"}?`, confirmLabel: "Unassign", danger: true }))) return;
+    if (bulkMode === "replace" && bulkTas.length === 0 && !(await confirmBox({ title: `Unassign everyone from ${ids.length} paper${ids.length === 1 ? "" : "s"}?`, confirmLabel: "Unassign", danger: true }))) return;
+    setBusy(true);
     try {
       const r = await api<{ updated: number }>(`/submissions/bulk/assignment`, {
         method: "PUT", json: { submission_ids: ids, ta_ids: bulkTas, mode: bulkMode },
       });
       setInfo(`TAs ${{ replace: "set on", add: "added to", remove: "removed from" }[bulkMode]} ${r.updated} paper${r.updated === 1 ? "" : "s"}.`);
-      load();
-    } catch (e) { setError(errMsg(e)); }
+      await load();
+    } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
   const visible = (subs ?? []).filter((s) =>
@@ -183,7 +202,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       <div className="row between">
         <h2 style={{ margin: 0 }}>Papers</h2>
         <div className="row">
-          <button className="primary" onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
+          <button type="button" className="primary" disabled={busy} onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
           <a className="btn" href={`/api/exams/${examId}/export.csv`}>Export grades (CSV)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip?raw=true`} title="The original scans of every paper, graded or not">Export raw PDFs (ZIP)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip`}>Export PDFs (ZIP)</a>
@@ -204,8 +223,8 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
             </div>
             <div className="row" style={{ gap: ".5rem" }}>
               <a className="btn" href={`/api/exams/${examId}/export.zip?ids=${(subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id).join(",")}`}>Export PDFs (ZIP)</a>
-              <button className="primary" onClick={gradeSelected}>Grade selected</button>
-              <button className="danger" onClick={deleteSelected}>Delete selected</button>
+              <button type="button" className="primary" disabled={busy} onClick={gradeSelected}>Grade selected</button>
+              <button type="button" className="danger" disabled={busy} onClick={deleteSelected}>Delete selected</button>
             </div>
           </div>
           <div className="bulk-assign">
@@ -214,7 +233,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
                 options={[{ value: "add", label: "Add TAs" }, { value: "replace", label: "Set TAs" }, { value: "remove", label: "Remove TAs" }]} />
             </div>
             <div className="bulk-ta"><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
-            <button onClick={assignSelected} disabled={bulkTas.length === 0 && bulkMode !== "replace"}>Apply</button>
+            <button type="button" onClick={assignSelected} disabled={busy || (bulkTas.length === 0 && bulkMode !== "replace")}>Apply</button>
           </div>
         </div>
       )}

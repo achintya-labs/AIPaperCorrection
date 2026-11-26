@@ -5,6 +5,7 @@ import type { AutoSplitResult, ImportItem, ImportResult, UserAdmin } from "../li
 import { Alert, ConfidenceBadge } from "./ui";
 import { autoSplitButton, isSplitInFlight } from "../lib/importState";
 import { matchesQuery } from "../lib/search";
+import { downloadBlob } from "../lib/uiHelpers";
 import SearchBox, { NoMatches } from "./SearchBox";
 import TaMultiSelect from "./TaMultiSelect";
 
@@ -12,6 +13,7 @@ type Layout = "files" | "combined" | "auto";
 type Assign = "" | "csv" | "round_robin" | "none";
 
 interface EditableSplit {
+  _key: number;
   student_external_id: string;
   student_name: string;
   first_page: number;
@@ -19,6 +21,10 @@ interface EditableSplit {
   confidence: number | null;
   ta_ids: number[];
 }
+
+let nextSplitKey = 1;
+const toEditable = (list: AutoSplitResult["splits"]): EditableSplit[] =>
+  list.map((sp) => ({ ...sp, _key: nextSplitKey++, ta_ids: [] }));
 
 const TEMPLATES: Record<Layout, string> = {
   auto: "roll_number,name\n2024CS01,Ann Lee\n2024CS02,Bo Chen\n",
@@ -46,25 +52,28 @@ export default function ImportWizard({ examId }: { examId: number }) {
   const [inputKey, setInputKey] = useState(0);
 
   useEffect(() => {
+    let alive = true;
     api<AutoSplitResult[]>(`/exams/${examId}/imports/auto-split`)
       .then((jobs) => {
-        if (jobs.length > 0) {
-          const latest = jobs[0];
-          setLayout("auto");
-          setAutoResult(latest);
-          if (latest.status === "ready") {
-            setSplits(latest.splits.map((sp) => ({ ...sp, ta_ids: [] })));
-          }
+        if (!alive || jobs.length === 0) return;
+        const latest = jobs[0];
+        setLayout("auto");
+        setAutoResult(latest);
+        if (latest.status === "ready") {
+          setSplits(toEditable(latest.splits));
         }
       })
-      .catch(() => {});
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    return () => { alive = false; };
   }, [examId]);
 
   useEffect(() => {
     if (layout !== "auto") return;
+    let alive = true;
     api<UserAdmin[]>("/auth/users")
-      .then((u) => setTas(u.filter((x) => x.active && x.role === "ta")))
-      .catch(() => {});
+      .then((u) => { if (alive) setTas(u.filter((x) => x.active && x.role === "ta")); })
+      .catch((e) => { if (alive) setError(errMsg(e)); });
+    return () => { alive = false; };
   }, [layout]);
 
   const splitInFlight = isSplitInFlight(autoResult);
@@ -72,23 +81,26 @@ export default function ImportWizard({ examId }: { examId: number }) {
   const splitBtn = autoSplitButton({ pdfCount: pdfs.length, busy, autoResult });
   useEffect(() => {
     if (!splitInFlight || !autoResult) return;
+    let alive = true;
     const token = autoResult.split_token;
     const timer = setInterval(() => {
       api<AutoSplitResult>(`/exams/${examId}/imports/auto-split/${token}`)
         .then((res) => {
+          if (!alive) return;
           setAutoResult(res);
           if (res.status === "ready") {
-            setSplits(res.splits.map((sp) => ({ ...sp, ta_ids: [] })));
+            setSplits(toEditable(res.splits));
           }
         })
         .catch((e) => {
+          if (!alive) return;
           if (e instanceof ApiError && e.status === 404) {
             // Job was discarded elsewhere: stop polling instead of erroring forever.
             setAutoResult(null); setSplits([]);
           } else setError(errMsg(e));
         });
     }, 3000);
-    return () => clearInterval(timer);
+    return () => { alive = false; clearInterval(timer); };
   }, [splitInFlight, autoResult?.split_token, examId]);
 
   useEffect(() => {
@@ -140,7 +152,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
         api(`/exams/${examId}/imports/auto-split/${stale.split_token}`, { method: "DELETE" }).catch(() => {});
       }
       setAutoResult(res);
-      setSplits(res.status === "ready" ? res.splits.map((sp) => ({ ...sp, ta_ids: [] })) : []);
+      setSplits(res.status === "ready" ? toEditable(res.splits) : []);
     } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
 
@@ -200,10 +212,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
   }
 
   function downloadTemplate() {
-    const url = URL.createObjectURL(new Blob([TEMPLATES[layout]], { type: "text/csv" }));
-    const a = document.createElement("a");
-    a.href = url; a.download = layout === "auto" ? "roster.csv" : `import-${layout}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(layout === "auto" ? "roster.csv" : `import-${layout}.csv`, TEMPLATES[layout], "text/csv");
   }
 
   const counts = (result?.items ?? []).reduce((c, i: ImportItem) => ({ ...c, [i.status]: (c[i.status] ?? 0) + 1 }), {} as Record<string, number>);
@@ -395,10 +404,11 @@ export default function ImportWizard({ examId }: { examId: number }) {
                         ...tas.map((t) => ({ value: String(t.id), label: t.name ? `${t.name} — ${t.email}` : t.email })),
                       ]} />
                   </div>
-                  <button onClick={applyBulkTa}>Apply to all</button>
-                  <button onClick={() => setSplits((all) => [
+                  <button type="button" onClick={applyBulkTa}>Apply to all</button>
+                  <button type="button" onClick={() => setSplits((all) => [
                     ...all,
                     {
+                      _key: nextSplitKey++,
                       student_external_id: "",
                       student_name: "",
                       first_page: Math.min(autoResult.page_count, (all[all.length - 1]?.last_page ?? 0) + 1),
@@ -433,7 +443,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
                 const update = (patch: Partial<EditableSplit>) =>
                   setSplits((all) => all.map((x, k) => (k === idx ? { ...x, ...patch } : x)));
                 return (
-                  <div key={idx} className="card paper">
+                  <div key={sp._key} className="card paper">
                     <div className="paper-head">
                       <div className="paper-title">
                         <strong>Paper {idx + 1}</strong>
@@ -519,13 +529,19 @@ export default function ImportWizard({ examId }: { examId: number }) {
 
           {zoomPage !== null && autoResult && (
             <div className="zoom-backdrop" onClick={() => setZoomPage(null)}>
-              <div className="card zoom-modal" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="card zoom-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Page ${zoomPage} of ${autoResult.page_count}`}
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="zoom-head">
                   <strong>Page {zoomPage} of {autoResult.page_count}</strong>
                   <div className="row">
-                    <button disabled={zoomPage <= 1} onClick={() => setZoomPage((p) => (p && p > 1 ? p - 1 : p))}>← Prev</button>
-                    <button disabled={zoomPage >= autoResult.page_count} onClick={() => setZoomPage((p) => (p && p < autoResult.page_count ? p + 1 : p))}>Next →</button>
-                    <button onClick={() => setZoomPage(null)}>Close</button>
+                    <button type="button" disabled={zoomPage <= 1} onClick={() => setZoomPage((p) => (p && p > 1 ? p - 1 : p))}>← Prev</button>
+                    <button type="button" disabled={zoomPage >= autoResult.page_count} onClick={() => setZoomPage((p) => (p && p < autoResult.page_count ? p + 1 : p))}>Next →</button>
+                    <button type="button" autoFocus onClick={() => setZoomPage(null)}>Close</button>
                   </div>
                 </div>
                 <img
