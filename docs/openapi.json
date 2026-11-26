@@ -2313,7 +2313,7 @@
     },
     "/exams/{exam_id}/export.zip": {
       "get": {
-        "description": "Every paper of the exam as PDFs in a ZIP: graded papers annotated, ungraded ones as the original scan. `ids` (comma-separated submission ids) limits it to those\npapers. `ungraded=true` exports only papers that are uploaded or failed.",
+        "description": "Every paper of the exam as PDFs in a ZIP: graded papers annotated, ungraded ones as the original scan. `ids` (comma-separated submission ids) limits it to those\npapers. `raw=true` exports the ORIGINAL scans of every paper (or of `ids`), graded or not.",
         "operationId": "export_exam_pdfs_exams__exam_id__export_zip_get",
         "parameters": [
           {
@@ -2343,11 +2343,11 @@
           },
           {
             "in": "query",
-            "name": "ungraded",
+            "name": "raw",
             "required": false,
             "schema": {
               "default": false,
-              "title": "Ungraded",
+              "title": "Raw",
               "type": "boolean"
             }
           },

@@ -337,7 +337,11 @@ def test_export_zip_filters(client, storage):
     names = lambda r: sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist())  # noqa: E731
     assert names(client.get(f"/exams/{exam_id}/export.zip")) == ["b0.pdf", "b1.pdf"]
     assert names(client.get(f"/exams/{exam_id}/export.zip?ids={b}")) == ["b1.pdf"]
-    assert names(client.get(f"/exams/{exam_id}/export.zip?ungraded=true")) == ["b0.pdf"]
+    r = client.get(f"/exams/{exam_id}/export.zip?raw=true")
+    assert names(r) == ["b0.pdf", "b1.pdf"]
+    z = zipfile.ZipFile(io.BytesIO(r.content))  # raw = the stored originals, even for the graded paper
+    assert z.read("b1.pdf") == storage.read(f"x{b}.pdf") and z.read("b0.pdf") == storage.read(f"x{a}.pdf")
+    assert names(client.get(f"/exams/{exam_id}/export.zip?raw=true&ids={b}")) == ["b1.pdf"]
     assert client.get(f"/exams/{exam_id}/export.zip?ids=x").status_code == 422
     # Raw vs graded single-paper downloads: an ungraded paper gets the original from both; a graded one an annotated copy.
     raw_a, exp_a = client.get(f"/submissions/{a}/raw.pdf"), client.get(f"/submissions/{a}/export.pdf")

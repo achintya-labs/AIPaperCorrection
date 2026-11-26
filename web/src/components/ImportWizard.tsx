@@ -1,3 +1,4 @@
+import SelectMenu from "./SelectMenu";
 import { useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
 import type { AutoSplitResult, ImportItem, ImportResult, UserAdmin } from "../lib/types";
@@ -314,13 +315,15 @@ export default function ImportWizard({ examId }: { examId: number }) {
                   <div className="section-title">Assignment</div>
                   <div className="fields">
                     <div className="field">
-                      <label htmlFor="assign">Assign to TAs</label>
-                      <select id="assign" value={assign} onChange={(e) => { setAssign(e.target.value as Assign); setResult(null); }}>
-                        <option value="">Automatic (from CSV if it has ta_emails, else nobody)</option>
-                        <option value="csv">From the CSV's ta_emails column</option>
-                        <option value="round_robin">Spread evenly across all TAs</option>
-                        <option value="none">Don't assign yet</option>
-                      </select>
+                      <label>Assign to TAs</label>
+                      <SelectMenu<Assign> ariaLabel="Assign to TAs" value={assign} minWidth={280}
+                        onChange={(v) => { setAssign(v); setResult(null); }}
+                        options={[
+                          { value: "", label: "Automatic (from CSV if it has ta_emails, else nobody)" },
+                          { value: "csv", label: "From the CSV's ta_emails column" },
+                          { value: "round_robin", label: "Spread evenly across all TAs" },
+                          { value: "none", label: "Don't assign yet" },
+                        ]} />
                     </div>
                     {assign === "round_robin" && (
                       <div className="field">
@@ -384,12 +387,13 @@ export default function ImportWizard({ examId }: { examId: number }) {
                 </div>
                 <div className="bulk">
                   <div className="field">
-                    <label htmlFor="bulk-ta">Bulk assign all papers</label>
-                    <select id="bulk-ta" value={bulkTa} onChange={(e) => setBulkTa(e.target.value)}>
-                      <option value="">Unassigned (clear all)</option>
-                      {tas.length > 0 && <option value="round_robin">Spread evenly (round-robin)</option>}
-                      {tas.map((t) => <option key={t.id} value={String(t.id)}>{t.name ? `${t.name} — ${t.email}` : t.email}</option>)}
-                    </select>
+                    <label>Bulk assign all papers</label>
+                    <SelectMenu<string> ariaLabel="Bulk assign all papers" value={bulkTa} minWidth={240} onChange={setBulkTa}
+                      options={[
+                        { value: "", label: "Unassigned (clear all)" },
+                        ...(tas.length > 0 ? [{ value: "round_robin", label: "Spread evenly (round-robin)" }] : []),
+                        ...tas.map((t) => ({ value: String(t.id), label: t.name ? `${t.name} — ${t.email}` : t.email })),
+                      ]} />
                   </div>
                   <button onClick={applyBulkTa}>Apply to all</button>
                   <button onClick={() => setSplits((all) => [

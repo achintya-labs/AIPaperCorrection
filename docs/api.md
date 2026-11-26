@@ -559,7 +559,7 @@ Query (both optional):
 | Param | Meaning |
 |---|---|
 | `ids` | Comma-separated submission ids: export only those papers (used by the web UI's selection) |
-| `ungraded` | `true`: only papers that are `uploaded` or `failed` (so, original scans) |
+| `raw` | `true`: the **original scans** of every paper (or of `ids`), graded or not: no marks, no summary page |
 
 Bad `ids` → **422**.
 

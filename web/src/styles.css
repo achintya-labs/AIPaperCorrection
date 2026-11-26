@@ -64,6 +64,8 @@ button, .btn {
   text-decoration: none; display: inline-block;
 }
 button:hover:not(:disabled), .btn:hover { border-color: var(--accent); }
+/* Buttons inside tables are compact so a row's actions fit; standalone buttons keep the full size. */
+table button, table .btn { padding: .25rem .6rem; font-size: .85rem; }
 /* Disabled must read as "off" even for the light-grey primary button: flat, dark, dim text, no hover. */
 button:disabled, button.primary:disabled, button.danger:disabled {
   background: var(--bg); border-color: var(--border); border-style: dashed; color: #5a5a5a;
@@ -282,14 +284,16 @@ input[type="file"]::file-selector-button:hover { border-color: var(--accent); }
 .tas-cell { min-width: 190px; }
 .tas-view { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .tas-list { display: grid; gap: .5rem; min-width: 0; }
-/* compact bulk-action bar above the Papers table */
-.bulkbar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem .75rem; }
-.bulkbar select, .bulkbar button, .bulkbar .btn { padding: .2rem .55rem; font-size: .82rem; min-height: 0; }
-.bulkbar .multiselect-trigger { padding: .2rem .5rem; min-height: 0; font-size: .82rem; }
-.bulkbar .bulk-ta { width: 11rem; }
-.bulkbar .bulk-right { margin-left: auto; display: flex; flex-wrap: wrap; gap: .4rem; }
+/* bulk-action bar above the Papers table: counts and grade/delete on top, TA assignment on one line below */
+.bulkbar { position: sticky; top: 0; z-index: 20; display: grid; gap: .6rem; padding: .7rem .9rem; }
+.bulkbar .bulk-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+.bulkbar .bulk-assign { display: flex; flex-wrap: nowrap; align-items: center; gap: .5rem; }
+.bulkbar .bulk-mode { flex: 0 0 8.5rem; }
+.bulkbar .bulk-ta { flex: 0 1 16rem; min-width: 0; }
+.bulkbar .bulk-assign > button { flex: none; }
+@media (max-width: 560px) { .bulkbar .bulk-assign { flex-wrap: wrap; } .bulkbar .bulk-mode, .bulkbar .bulk-ta { flex: 1 1 100%; } }
 .icon-btn { padding: .05rem .4rem; font-size: .85rem; line-height: 1.2; flex: none; }
-.btn-sm { padding: .15rem .6rem; font-size: .8rem; flex: none; }
+.btn-sm { padding: .1rem .5rem; font-size: .75rem; flex: none; }
 
 /* TA picker */
 .multiselect-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem; text-align: left; padding: .35rem .65rem; min-height: 2.4rem; }
@@ -310,3 +314,9 @@ input[type="file"]::file-selector-button:hover { border-color: var(--accent); }
 /* Claude's note to the TA: visible while correcting, never exported */
 .reviewer-note { margin-top: .5rem; padding: .5rem .65rem; background: var(--warn-bg); color: var(--text); border: 1px solid var(--warn); border-radius: 6px; }
 .reviewer-note-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--warn); margin-bottom: .2rem; }
+
+/* in-page dialogs (components/DialogHost.tsx) replacing confirm()/prompt() */
+.dialog-backdrop { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(0, 0, 0, .6); }
+.dialog { width: min(32rem, 100%); max-height: 90vh; overflow: auto; display: grid; gap: .85rem; box-shadow: 0 16px 48px rgba(0, 0, 0, .55); }
+.dialog-message { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.dialog button.danger:not(:disabled) { border-color: var(--bad); }

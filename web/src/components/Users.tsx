@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
 import type { Role, User, UserAdmin } from "../lib/types";
 import { Alert } from "./ui";
+import { confirmBox, formBox } from "../lib/dialog";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
+import SelectMenu from "./SelectMenu";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -24,7 +26,6 @@ export default function Users() {
   const [ok, setOk] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
-  const [editName, setEditName] = useState<{ id: number; value: string } | null>(null);
   const [resetting, setResetting] = useState<{ id: number; value: string; generated: boolean } | null>(null);
 
   const load = () => api<UserAdmin[]>("/auth/users").then(setUsers).catch((e) => setError(errMsg(e)));
@@ -60,22 +61,26 @@ export default function Users() {
     } catch (err) { setError(errMsg(err)); } finally { setBusy(null); }
   }
 
-  async function saveName(u: UserAdmin) {
-    if (!editName) return;
-    await patch(u, { name: editName.value }, `Name for ${u.email} updated.`);
-    setEditName(null);
+  async function renameUser(u: UserAdmin) {
+    const v = await formBox({
+      title: "Edit user",
+      message: `${u.email}\nThe email is the user's key and can't be changed.`,
+      fields: [{ name: "name", label: "Name", value: u.name }],
+    });
+    if (!v || v.name.trim() === u.name) return;
+    await patch(u, { name: v.name }, `Name for ${u.email} updated.`);
   }
 
-  function changeRole(u: UserAdmin, role: Role) {
+  async function changeRole(u: UserAdmin, role: Role) {
     if (role === u.role) return;
     const msg = role === "admin"
       ? `Make ${u.email} an Admin? Admins can see every paper and manage exams and users.`
       : `Make ${u.email} a TA? They will only see papers assigned to them.`;
-    if (confirm(msg)) patch(u, { role }, `${u.email} is now ${role === "admin" ? "an Admin" : "a TA"}. It applies immediately.`);
+    if (await confirmBox({ title: `Change role of ${u.email}?`, message: msg, confirmLabel: "Change role" })) patch(u, { role }, `${u.email} is now ${role === "admin" ? "an Admin" : "a TA"}. It applies immediately.`);
   }
 
-  function toggleActive(u: UserAdmin) {
-    if (u.active && !confirm(`Deactivate ${u.email}? They are signed out immediately and can't sign in. Their assignments and review history are kept.`)) return;
+  async function toggleActive(u: UserAdmin) {
+    if (u.active && !(await confirmBox({ title: `Deactivate ${u.email}?`, message: "They are signed out immediately and can't sign in. Their assignments and review history are kept.", confirmLabel: "Deactivate", danger: true }))) return;
     patch(u, { active: !u.active }, `${u.email} ${u.active ? "deactivated" : "reactivated"}.`);
   }
 
@@ -102,7 +107,7 @@ export default function Users() {
       "they are signed out immediately",
       "this can't be undone",
     ].filter(Boolean).join("; ");
-    if (!confirm(`Delete ${u.email} permanently?\n\n${effects}.`)) return;
+    if (!(await confirmBox({ title: `Delete ${u.email}?`, message: `${effects[0].toUpperCase()}${effects.slice(1)}.`, confirmLabel: "Delete", danger: true }))) return;
     setBusy(u.id);
     try {
       await api(`/auth/users/${u.id}`, { method: "DELETE" });
@@ -110,7 +115,7 @@ export default function Users() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && u.reviewed_grades > 0) {
         // Refused because they reviewed grades: offer the explicit, destructive option.
-        if (confirm(`${u.email} reviewed ${plural(u.reviewed_grades, "grade")}.\n\nDeleting keeps those grades but erases who reviewed them. Deactivating instead keeps that history.\n\nDelete anyway?`)) {
+        if (await confirmBox({ title: "Delete anyway?", message: `${u.email} reviewed ${plural(u.reviewed_grades, "grade")}.\n\nDeleting keeps those grades but erases who reviewed them. Deactivating instead keeps that history.`, confirmLabel: "Delete anyway", danger: true })) {
           try {
             await api(`/auth/users/${u.id}?force=true`, { method: "DELETE" });
             setOk(`Deleted ${u.email}; their grades were kept without a reviewer.`);
@@ -168,21 +173,11 @@ export default function Users() {
                     <td>
                       <strong>{u.email}</strong>{self && <span className="badge neutral" style={{ marginLeft: ".4rem" }}>you</span>}
                       {!u.has_password && <span className="badge neutral" style={{ marginLeft: ".4rem" }} title="No password set: can only sign in with Google">Google only</span>}
-                      {editName?.id === u.id ? (
-                        <div className="row" style={{ gap: ".4rem", marginTop: ".3rem", flexWrap: "nowrap" }}>
-                          <input aria-label={`Name for ${u.email}`} value={editName.value} autoFocus placeholder="Name"
-                            onChange={(e) => setEditName({ id: u.id, value: e.target.value })}
-                            onKeyDown={(e) => { if (e.key === "Enter") saveName(u); if (e.key === "Escape") setEditName(null); }} />
-                          <button className="primary btn-sm" disabled={busy === u.id} onClick={() => saveName(u)}>Save</button>
-                          <button className="btn-sm" onClick={() => setEditName(null)}>Cancel</button>
-                        </div>
-                      ) : (
-                        <div className="row" style={{ gap: ".4rem", flexWrap: "nowrap" }}>
-                          <span className="muted small">{u.name || "no name"}</span>
-                          <button className="icon-btn" aria-label={`Edit name of ${u.email}`} title="Edit name (the email can't be changed)"
-                            onClick={() => setEditName({ id: u.id, value: u.name })}>✎</button>
-                        </div>
-                      )}
+                      <div className="row" style={{ gap: ".4rem", flexWrap: "nowrap" }}>
+                        <span className="muted small">{u.name || "no name"}</span>
+                        <button className="icon-btn" aria-label={`Edit name of ${u.email}`} title="Edit name (the email can't be changed)"
+                          disabled={busy === u.id} onClick={() => renameUser(u)}>✎</button>
+                      </div>
                     </td>
                     <td>
                       <RoleSelect
@@ -249,81 +244,5 @@ function RoleSelect({
   title?: string;
   ariaLabel?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const label = ROLES.find((r) => r.value === value)?.label ?? value;
-
-  return (
-    <div ref={boxRef} style={{ position: "relative", minWidth: 110 }}>
-      <button
-        type="button"
-        aria-label={ariaLabel}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        disabled={disabled}
-        title={title}
-        onClick={() => setOpen((o) => !o)}
-        style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".5rem" }}
-      >
-        <span>{label}</span>
-        <span className="small muted">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <div
-          role="listbox"
-          className="card stack"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            right: 0,
-            minWidth: 120,
-            zIndex: 30,
-            padding: ".35rem",
-            gap: ".2rem",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
-          }}
-        >
-          {ROLES.map((r) => (
-            <button
-              key={r.value}
-              type="button"
-              role="option"
-              aria-selected={r.value === value}
-              onClick={() => {
-                setOpen(false);
-                if (r.value !== value) onChange(r.value);
-              }}
-              style={{
-                textAlign: "left",
-                border: 0,
-                background: r.value === value ? "var(--info-bg)" : "transparent",
-                color: r.value === value ? "var(--info)" : "var(--text)",
-                fontWeight: r.value === value ? 600 : 400,
-              }}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  return <SelectMenu value={value} options={ROLES} onChange={onChange} disabled={disabled} title={title} ariaLabel={ariaLabel} />;
 }

@@ -1,5 +1,6 @@
 ---
 import "../styles.css";
+import DialogHost from "../components/DialogHost";
 
 interface Props { title: string; wide?: boolean }
 const { title, wide = false } = Astro.props;
@@ -45,6 +46,7 @@ const path = Astro.url.pathname;
     <main class:list={["container", { wide }]}>
       <slot />
     </main>
+    <DialogHost client:load />
     <script>
       document.getElementById("logout")?.addEventListener("click", async () => {
         // Content-Type is required here: body-less POSTs without one fail Astro's origin check.

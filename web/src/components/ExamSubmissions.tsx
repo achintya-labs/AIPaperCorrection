@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
 import type { Submission, UserAdmin } from "../lib/types";
 import { deletePaperFlow } from "../lib/actions";
+import { confirmBox, formBox } from "../lib/dialog";
 import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
 import TaMultiSelect from "./TaMultiSelect";
+import SelectMenu from "./SelectMenu";
 
 export default function ExamSubmissions({ examId }: { examId: number }) {
   const [subs, setSubs] = useState<Submission[] | null>(null);
@@ -15,7 +17,6 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<{ id: number; ids: Set<number> } | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
-  const [editStudent, setEditStudent] = useState<{ id: number; external_id: string; name: string } | null>(null);
   const [bulkTas, setBulkTas] = useState<number[]>([]);
   const [bulkMode, setBulkMode] = useState<"replace" | "add" | "remove">("add");
 
@@ -41,7 +42,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
 
   async function queueWaiting() {
     setError(""); setInfo("");
-    if (!confirm("Grade every paper that hasn't been graded yet (uploaded or failed)? Claude will be used for each.")) return;
+    if (!(await confirmBox({ title: "Grade all ungraded papers?", message: "Every paper that is uploaded or failed will be sent to Claude.", confirmLabel: "Grade all" }))) return;
     try {
       const r = await api<{ queued: number }>(`/exams/${examId}/queue`, { method: "POST" });
       setInfo(`${r.queued} paper${r.queued === 1 ? "" : "s"} queued for grading.`);
@@ -52,12 +53,12 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   async function regrade(s: Submission) {
     setError(""); setInfo("");
     const first = s.status === "uploaded" || s.status === "failed";
-    if (!first && !confirm(`Regrade ${s.student.external_id}? Claude's grades will be replaced.`)) return;
+    if (!first && !(await confirmBox({ title: `Regrade ${s.student.external_id}?`, message: "Claude's grades for this paper will be replaced.", confirmLabel: "Regrade" }))) return;
     try {
       await api(`/submissions/${s.id}/regrade`, { method: "POST", json: {} });
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && /force/.test(e.message)) {
-        if (!confirm("This paper has TA-reviewed grades. Regrading will DISCARD their edits. Continue?")) return;
+        if (!(await confirmBox({ title: "Discard TA edits?", message: "This paper has TA-reviewed grades. Regrading will DISCARD their edits.", confirmLabel: "Regrade anyway", danger: true }))) return;
         try { await api(`/submissions/${s.id}/regrade`, { method: "POST", json: { force: true } }); }
         catch (e2) { setError(errMsg(e2)); return; }
       } else { setError(errMsg(e)); return; }
@@ -93,13 +94,20 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     setError(""); setInfo("");
     const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
     const gradedBefore = (subs ?? []).filter((x) => picked.has(x.id) && !["uploaded", "failed"].includes(x.status)).length;
-    if (!confirm(`Grade ${ids.length} selected paper${ids.length === 1 ? "" : "s"} with Claude?` +
-      (gradedBefore ? `\n\n${gradedBefore} already graded; their Claude grades will be replaced.` : ""))) return;
+    if (!(await confirmBox({
+      title: `Grade ${ids.length} selected paper${ids.length === 1 ? "" : "s"}?`,
+      message: "They will be sent to Claude." + (gradedBefore ? `\n\n${gradedBefore} already graded; their Claude grades will be replaced.` : ""),
+      confirmLabel: "Grade",
+    }))) return;
     try {
       type Res = { queued: number; skipped: number };
       let r = await api<Res>(`/submissions/bulk/grade`, { method: "POST", json: { submission_ids: ids } });
       const reviewed = (subs ?? []).filter((x) => picked.has(x.id) && x.grades_reviewed > 0).length;
-      if (reviewed && confirm(`${reviewed} selected paper${reviewed === 1 ? " has" : "s have"} TA-reviewed grades and ${reviewed === 1 ? "was" : "were"} skipped.\n\nRegrade anyway and DISCARD those edits?`)) {
+      if (reviewed && await confirmBox({
+        title: "Discard TA edits?",
+        message: `${reviewed} selected paper${reviewed === 1 ? " has" : "s have"} TA-reviewed grades and ${reviewed === 1 ? "was" : "were"} skipped.\n\nRegrade anyway and DISCARD those edits?`,
+        confirmLabel: "Regrade anyway", danger: true,
+      })) {
         const r2 = await api<Res>(`/submissions/bulk/grade`, { method: "POST", json: { submission_ids: ids, force: true } });
         r = { queued: r.queued + r2.queued, skipped: r2.skipped };
       }
@@ -111,7 +119,11 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   async function deleteSelected() {
     setError(""); setInfo("");
     const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
-    if (!confirm(`Permanently delete ${ids.length} selected paper${ids.length === 1 ? "" : "s"}?\n\nTheir page images, Claude's grades and any TA review work are deleted. The student records are kept. This can't be undone.`)) return;
+    if (!(await confirmBox({
+      title: `Delete ${ids.length} selected paper${ids.length === 1 ? "" : "s"}?`,
+      message: "Their page images, Claude's grades and any TA review work are permanently deleted. The student records are kept. This can't be undone.",
+      confirmLabel: "Delete", danger: true,
+    }))) return;
     const del = (force: boolean) =>
       api<{ deleted: number }>(`/submissions/bulk/delete`, { method: "POST", json: { submission_ids: ids, force } });
     try {
@@ -119,7 +131,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       try { r = await del(false); }
       catch (e) {
         if (!(e instanceof ApiError && e.status === 409 && /force/.test(e.message))) throw e;
-        if (!confirm(`${e.message}\n\nDelete them anyway?`)) return;
+        if (!(await confirmBox({ title: "Delete anyway?", message: e.message, confirmLabel: "Delete anyway", danger: true }))) return;
         r = await del(true);
       }
       setPicked(new Set());
@@ -128,12 +140,20 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     } catch (e) { setError(errMsg(e)); }
   }
 
-  async function saveStudent() {
-    if (!editStudent) return;
+  async function editStudent(s: Submission) {
     setError(""); setInfo("");
+    const v = await formBox({
+      title: "Edit student",
+      fields: [
+        { name: "external_id", label: "Roll number", value: s.student.external_id, required: true },
+        { name: "name", label: "Name", value: s.student.name },
+      ],
+    });
+    if (!v) return;
+    if (v.external_id.trim() === s.student.external_id && v.name.trim() === s.student.name) return;
     try {
-      await api(`/students/${editStudent.id}`, { method: "PATCH", json: { external_id: editStudent.external_id, name: editStudent.name } });
-      setEditStudent(null);
+      await api(`/students/${s.student.id}`, { method: "PATCH", json: { external_id: v.external_id, name: v.name } });
+      setInfo("Student updated.");
       load();
     } catch (e) { setError(errMsg(e)); }
   }
@@ -141,7 +161,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   async function assignSelected() {
     setError(""); setInfo("");
     const ids = (subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id);
-        if (bulkMode === "replace" && bulkTas.length === 0 && !confirm(`Unassign everyone from ${ids.length} paper${ids.length === 1 ? "" : "s"}?`)) return;
+        if (bulkMode === "replace" && bulkTas.length === 0 && !(await confirmBox({ title: `Unassign everyone from ${ids.length} paper${ids.length === 1 ? "" : "s"}?`, confirmLabel: "Unassign", danger: true }))) return;
     try {
       const r = await api<{ updated: number }>(`/submissions/bulk/assignment`, {
         method: "PUT", json: { submission_ids: ids, ta_ids: bulkTas, mode: bulkMode },
@@ -163,9 +183,9 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       <div className="row between">
         <h2 style={{ margin: 0 }}>Papers</h2>
         <div className="row">
-          <button onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
+          <button className="primary" onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
           <a className="btn" href={`/api/exams/${examId}/export.csv`}>Export grades (CSV)</a>
-          <a className="btn" href={`/api/exams/${examId}/export.zip?ungraded=true`} title="Original scans of papers that are uploaded or failed">Export ungraded PDFs (ZIP)</a>
+          <a className="btn" href={`/api/exams/${examId}/export.zip?raw=true`} title="The original scans of every paper, graded or not">Export raw PDFs (ZIP)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip`}>Export PDFs (ZIP)</a>
         </div>
       </div>
@@ -177,19 +197,24 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       )}
       {pickedCount > 0 && (
         <div className="card bulkbar">
-          <strong>{pickedCount} selected</strong>
-          <button className="link" onClick={() => setPicked(new Set())}>Clear</button>
-          <select value={bulkMode} onChange={(e) => setBulkMode(e.target.value as typeof bulkMode)} aria-label="How to apply TAs">
-            <option value="add">Add TAs</option>
-            <option value="replace">Set TAs</option>
-            <option value="remove">Remove TAs</option>
-          </select>
-          <div className="bulk-ta"><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
-          <button onClick={assignSelected} disabled={bulkTas.length === 0 && bulkMode !== "replace"}>Apply</button>
-          <div className="bulk-right">
-            <a className="btn" href={`/api/exams/${examId}/export.zip?ids=${(subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id).join(",")}`}>Export PDFs (ZIP)</a>
-            <button className="primary" onClick={gradeSelected}>Grade selected</button>
-            <button className="danger" onClick={deleteSelected}>Delete selected</button>
+          <div className="bulk-top">
+            <div className="row" style={{ gap: ".6rem" }}>
+              <strong>{pickedCount} selected</strong>
+              <button className="link" onClick={() => setPicked(new Set())}>Clear</button>
+            </div>
+            <div className="row" style={{ gap: ".5rem" }}>
+              <a className="btn" href={`/api/exams/${examId}/export.zip?ids=${(subs ?? []).filter((x) => picked.has(x.id)).map((x) => x.id).join(",")}`}>Export PDFs (ZIP)</a>
+              <button className="primary" onClick={gradeSelected}>Grade selected</button>
+              <button className="danger" onClick={deleteSelected}>Delete selected</button>
+            </div>
+          </div>
+          <div className="bulk-assign">
+            <div className="bulk-mode">
+              <SelectMenu value={bulkMode} onChange={setBulkMode} ariaLabel="How to apply TAs" minWidth={130}
+                options={[{ value: "add", label: "Add TAs" }, { value: "replace", label: "Set TAs" }, { value: "remove", label: "Remove TAs" }]} />
+            </div>
+            <div className="bulk-ta"><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
+            <button onClick={assignSelected} disabled={bulkTas.length === 0 && bulkMode !== "replace"}>Apply</button>
           </div>
         </div>
       )}
@@ -209,26 +234,12 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
               {visible.map((s) => (
                 <tr key={s.id}>
                   <td><input type="checkbox" aria-label={`Select ${s.student.external_id}`} checked={picked.has(s.id)} onChange={(e) => toggle(s.id, e.target.checked)} /></td>
-                  <td className="wrap">
-                    {editStudent?.id === s.student.id ? (
-                      <div className="stack" style={{ gap: ".35rem", minWidth: 190 }}>
-                        <input aria-label="Roll number" placeholder="Roll number" value={editStudent.external_id}
-                          onChange={(e) => setEditStudent({ ...editStudent, external_id: e.target.value })} />
-                        <input aria-label="Name" placeholder="Name" value={editStudent.name}
-                          onChange={(e) => setEditStudent({ ...editStudent, name: e.target.value })}
-                          onKeyDown={(e) => { if (e.key === "Enter") saveStudent(); if (e.key === "Escape") setEditStudent(null); }} />
-                        <div className="row" style={{ gap: ".4rem" }}>
-                          <button className="primary btn-sm" onClick={saveStudent} disabled={!editStudent.external_id.trim()}>Save</button>
-                          <button className="btn-sm" onClick={() => setEditStudent(null)}>Cancel</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="row" style={{ gap: ".5rem", flexWrap: "nowrap" }}>
-                        <div><strong>{s.student.external_id}</strong>{s.student.name && <div className="small muted">{s.student.name}</div>}</div>
-                        <button className="icon-btn" aria-label={`Edit ${s.student.external_id}`} title="Edit roll number / name"
-                          onClick={() => setEditStudent({ id: s.student.id, external_id: s.student.external_id, name: s.student.name })}>✎</button>
-                      </div>
-                    )}
+                  <td>
+                    <div className="row" style={{ gap: ".5rem", flexWrap: "nowrap" }}>
+                      <div><strong>{s.student.external_id}</strong>{s.student.name && <div className="small muted">{s.student.name}</div>}</div>
+                      <button className="icon-btn" aria-label={`Edit ${s.student.external_id}`} title="Edit roll number / name"
+                        onClick={() => editStudent(s)}>✎</button>
+                    </div>
                   </td>
                   <td><StatusBadge status={s.status} /></td>
                   <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>

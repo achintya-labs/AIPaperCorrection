@@ -361,12 +361,12 @@ def export_submission_pdf(
 def export_exam_pdfs(
     exam_id: int,
     ids: str | None = None,
-    ungraded: bool = False,
+    raw: bool = False,
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ):
     """Every paper of the exam as PDFs in a ZIP: graded papers annotated, ungraded ones as the original scan. `ids` (comma-separated submission ids) limits it to those
-    papers. `ungraded=true` exports only papers that are uploaded or failed."""
+    papers. `raw=true` exports the ORIGINAL scans of every paper (or of `ids`), graded or not."""
     exam = db.get(Exam, exam_id)
     if not exam:
         raise HTTPException(404, "Exam not found")
@@ -377,8 +377,6 @@ def export_exam_pdfs(
         except ValueError:
             raise HTTPException(422, "ids must be comma-separated numbers")
         q = q.where(Submission.id.in_(wanted))
-    if ungraded:
-        q = q.where(Submission.status.in_([SubmissionStatus.uploaded, SubmissionStatus.failed]))
     subs = db.scalars(
         q.options(
             selectinload(Submission.student),
@@ -395,7 +393,7 @@ def export_exam_pdfs(
             if not storage.exists(s.pdf_path):
                 continue
             data = storage.read(s.pdf_path)
-            annotated = _export_pdf(s, exam.name, data, s.pages, s.grades) if s.status in GRADED else data
+            annotated = _export_pdf(s, exam.name, data, s.pages, s.grades) if s.status in GRADED and not raw else data
             base = _safe_filename(s.student.external_id, fallback=f"submission-{s.id}")
             name = f"{base}.pdf"
             if name in used_names:
@@ -403,7 +401,7 @@ def export_exam_pdfs(
             used_names.add(name)
             zf.writestr(name, annotated)
 
-    label = "ungraded-papers" if ungraded else "papers"
+    label = "raw-papers" if raw else "papers"
     return Response(
         buf.getvalue(),
         media_type="application/zip",
