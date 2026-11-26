@@ -16,7 +16,7 @@ jobs:
     name: API tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12" # what the images run
@@ -50,7 +50,7 @@ jobs:
     env:
       PG_TEST_URL: postgresql+psycopg://postgres:ci@localhost:5432/grader_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -77,7 +77,7 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -97,7 +97,7 @@ jobs:
     name: Compose and workflows
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: docker-compose.yml parses, locally built and with published images
         run: |
           cp .env.example .env
@@ -129,7 +129,7 @@ jobs:
           - { image: claude, context: ., file: ./claude/Dockerfile }
           - { image: gateway, context: ., file: ./gateway/Dockerfile }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
