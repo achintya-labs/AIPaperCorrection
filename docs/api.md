@@ -292,6 +292,12 @@ Any, scoped. **200** → `SubmissionOut`. **404** if missing or not yours.
 Admin. Body `{"ta_ids": [2, 5]}`: **replaces** the set of assigned TAs (several are allowed; `[]` unassigns
 everyone). **200** → `SubmissionOut`. **404** submission. **422** if any id is unknown or inactive.
 
+### `PUT /submissions/bulk/assignment`
+Admin. Assigns TAs to several papers at once. Body `{"submission_ids": [3, 4], "ta_ids": [2, 5], "mode": "replace"}`.
+`mode` is `replace` (default: each paper's TAs become exactly `ta_ids`; `[]` unassigns), `add` (keep the current TAs and
+add these) or `remove` (take these off). **200** → `{"updated": 2}`. **404** if any submission is unknown.
+**422** unknown/inactive TA, or `add`/`remove` with no TAs.
+
 ### `DELETE /submissions/{submission_id}`
 Admin. **Permanently deletes one paper**: its grades, page images, grading history and assignments, and the stored PDF.
 The student record stays. **204**. Query: `force` (bool, default `false`).
@@ -346,8 +352,8 @@ curl -s -b jar -F files=@1001.pdf -F files=@1002.pdf -F mapping_csv=@map.csv \
 
 Per item, `status` is `ok`, `conflict` (that student already has a submission for this exam) or `error`; only
 `ok` items are saved, the rest are reported and skipped. With `dry_run=false`, `created` is the number saved and
-each saved item carries its `submission_id`. New submissions are `queued` if the exam already has a rubric,
-otherwise `uploaded`.
+each saved item carries its `submission_id`. New submissions are always `uploaded`; grading is started
+separately (see [Grading control](#grading-control)).
 
 **404** exam. **413** a file over `MAX_UPLOAD_MB`. **422** request-level problems: bad CSV, duplicate
 `student_id`, bad or overlapping page ranges, combined import without exactly one PDF, round-robin with no
@@ -413,9 +419,11 @@ returns `ImportResult`. **404** exam or split session. **422** empty/duplicate `
 
 All admin-only.
 
+Nothing is graded automatically: imported papers stay `uploaded` until an admin starts grading, for one paper
+(`regrade`), a selection (`bulk/grade`) or the whole exam (`queue`).
+
 ### `POST /exams/{exam_id}/queue`
-Queues every `uploaded` or `failed` submission of the exam (for papers imported before the rubric existed, or
-failed jobs after fixing the cause). **200** → `{"queued": 3}`. **404** exam. **409** if the exam has no rubric.
+"Grade everything": queues every `uploaded` or `failed` submission of the exam. **200** → `{"queued": 3}`. **404** exam. **409** if the exam has no rubric.
 
 ### `POST /submissions/{submission_id}/regrade`
 Sends a finished or failed submission back to the queue; Claude's grades are replaced when it completes.
@@ -426,8 +434,15 @@ Body (send `{}` for defaults):
 | `rubric_version` | `null` | A specific version; `null` = latest at the time the job runs |
 | `force` | `false` | Allow discarding grades a TA already reviewed or edited |
 
-**200** → `{"queued": 1}`. **404** submission. **409** already `queued`/`grading`, or TA-reviewed grades exist and
-`force` is false. **422** unknown `rubric_version`.
+Also starts grading an `uploaded` paper for the first time.
+
+**200** → `{"queued": 1}`. **404** submission. **409** no rubric, already `queued`/`grading`, or TA-reviewed grades
+exist and `force` is false. **422** unknown `rubric_version`.
+
+### `POST /submissions/bulk/grade`
+Starts grading (or regrading) the chosen papers with the latest rubric. Body `{"submission_ids": [3, 4, 9], "force": false}`.
+Papers already `queued`/`grading` are skipped, as are papers with TA-reviewed grades unless `force` is true.
+**200** → `{"queued": 2, "skipped": 1}`. **404** if any id is unknown. **409** if an exam involved has no rubric.
 
 ### `GET /grader/status`
 Is the grading backend usable? **200** always:

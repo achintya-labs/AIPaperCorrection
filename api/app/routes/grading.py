@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -15,14 +15,30 @@ class QueueResult(BaseModel):
     queued: int
 
 
+class BulkGradeIn(BaseModel):
+    submission_ids: list[int] = Field(min_length=1)
+    force: bool = False  # allow discarding TA-reviewed grades
+
+
+class BulkGradeResult(BaseModel):
+    queued: int
+    skipped: int  # already queued/being graded, or TA-reviewed (without force)
+
+
 class RegradeIn(BaseModel):
     rubric_version: int | None = None  # None = latest at the time the job runs
     force: bool = False  # allow discarding TA-reviewed grades
 
 
+def _require_rubric(db: Session, exam_ids: set[int]) -> None:
+    for exam_id in exam_ids:
+        if db.scalar(select(Rubric.id).where(Rubric.exam_id == exam_id).limit(1)) is None:
+            raise HTTPException(409, "Create a rubric before grading papers")
+
+
 @router.post("/exams/{exam_id}/queue", response_model=QueueResult)
 def queue_exam(exam_id: int, db: Session = Depends(get_db)):
-    """Queue every submission that is waiting (uploaded, e.g. imported before the rubric) or failed."""
+    """Grade everything that hasn't been graded: queue every submission that is uploaded or failed."""
     if not db.get(Exam, exam_id):
         raise HTTPException(404, "Exam not found")
     if db.scalar(select(Rubric.id).where(Rubric.exam_id == exam_id).limit(1)) is None:
@@ -39,11 +55,40 @@ def queue_exam(exam_id: int, db: Session = Depends(get_db)):
     return QueueResult(queued=result.rowcount)
 
 
+@router.post("/submissions/bulk/grade", response_model=BulkGradeResult)
+def grade_selected(body: BulkGradeIn, db: Session = Depends(get_db)):
+    """Start grading (or regrading) the chosen papers with the latest rubric. Papers already queued or being
+    graded are skipped, and so are papers with TA-reviewed grades unless force=true."""
+    ids = set(body.submission_ids)
+    subs = db.scalars(select(Submission).where(Submission.id.in_(ids))).all()
+    if len(subs) != len(ids):
+        raise HTTPException(404, "Submission not found")
+    _require_rubric(db, {s.exam_id for s in subs})
+    reviewed = set(
+        db.scalars(
+            select(Grade.submission_id).where(Grade.submission_id.in_(ids), Grade.status != GradeStatus.pending)
+        )
+    )
+    queued = 0
+    for sub in subs:
+        if sub.status in (SubmissionStatus.queued, SubmissionStatus.grading):
+            continue
+        if sub.id in reviewed and not body.force:
+            continue
+        sub.rubric_id = None  # latest rubric at the time the job runs
+        sub.status = SubmissionStatus.queued
+        sub.error = None
+        queued += 1
+    db.commit()
+    return BulkGradeResult(queued=queued, skipped=len(subs) - queued)
+
+
 @router.post("/submissions/{submission_id}/regrade", response_model=QueueResult)
 def regrade(submission_id: int, body: RegradeIn, db: Session = Depends(get_db)):
     sub = db.get(Submission, submission_id)
     if not sub:
         raise HTTPException(404, "Submission not found")
+    _require_rubric(db, {sub.exam_id})
     if sub.status in (SubmissionStatus.queued, SubmissionStatus.grading):
         raise HTTPException(409, "Submission is already queued or being graded")
     reviewed = db.scalar(

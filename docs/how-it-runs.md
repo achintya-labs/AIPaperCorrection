@@ -461,7 +461,7 @@ the repository yet; see [libraries.md](libraries.md#testing).
 
 | Symptom | Cause and fix |
 |---|---|
-| Papers `failed`: "Claude is not logged in…" | Run `claude-login.sh`, then *Queue waiting & failed* on the exam's Papers tab |
+| Papers `failed`: "Claude is not logged in…" | Run `claude-login.sh`, then *Grade all* on the exam's Papers tab |
 | Banner "Grading isn't ready" on Exams page | Same: not logged in, or `CLAUDE_RUNNER_URL/TOKEN` wrong; the banner shows the reason |
 | "Claude runner rejected CLAUDE_RUNNER_TOKEN" | Token differs between `.env` and the running `claude` container. Recreate it: `up -d --force-recreate claude` |
 | "Claude runner unreachable" | `claude` container is down or unhealthy: `docker compose logs claude` |

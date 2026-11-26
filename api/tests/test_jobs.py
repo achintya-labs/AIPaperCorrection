@@ -253,3 +253,49 @@ def test_ta_cannot_queue_or_regrade(client, storage):
     login(client, "ta@x.io")
     assert client.post(f"/exams/{exam_id}/queue").status_code == 403
     assert client.post("/submissions/1/regrade", json={}).status_code == 403
+
+
+def _seed_subs(client, exam_id, statuses):
+    ids = []
+    with TestSession() as s:
+        for i, status in enumerate(statuses):
+            st = Student(external_id=f"b{i}")
+            s.add(st)
+            s.flush()
+            sub = Submission(exam_id=exam_id, student_id=st.id, pdf_path="p", status=status)
+            s.add(sub)
+            s.flush()
+            ids.append(sub.id)
+        s.commit()
+    return ids
+
+
+def test_bulk_grade_selected(client, storage):
+    exam_id = make_exam(client)
+    a, b, c, d = _seed_subs(client, exam_id, [SubmissionStatus.uploaded, SubmissionStatus.failed,
+                                              SubmissionStatus.grading, SubmissionStatus.uploaded])
+    assert client.post("/submissions/bulk/grade", json={"submission_ids": [a]}).status_code == 409  # no rubric
+    client.post(f"/exams/{exam_id}/rubrics", json={"questions": [{"number": "1", "max_points": 1}]})
+    r = client.post("/submissions/bulk/grade", json={"submission_ids": [a, b, c]})
+    assert r.json() == {"queued": 2, "skipped": 1}
+    status = {x["id"]: x["status"] for x in client.get("/submissions").json()}
+    assert status[a] == status[b] == "queued" and status[c] == "grading" and status[d] == "uploaded"
+    assert client.post("/submissions/bulk/grade", json={"submission_ids": [a, 999]}).status_code == 404
+    assert client.post("/submissions/bulk/grade", json={"submission_ids": []}).status_code == 422
+
+
+def test_bulk_assignment_modes(client, storage):
+    exam_id = make_exam(client)
+    a, b = _seed_subs(client, exam_id, [SubmissionStatus.uploaded] * 2)
+    from app.models import User
+    with TestSession() as s:
+        ta = s.query(User).filter_by(email="ta@x.io").one().id
+    put = lambda **kw: client.put("/submissions/bulk/assignment", json={"submission_ids": [a, b], **kw})  # noqa: E731
+    assert put(ta_ids=[ta]).json() == {"updated": 2}
+    ta_ids = lambda: [x["ta_ids"] for x in client.get("/submissions").json()]  # noqa: E731
+    assert ta_ids() == [[ta], [ta]]
+    assert put(ta_ids=[ta], mode="add").status_code == 200 and ta_ids() == [[ta], [ta]]  # no duplicates
+    assert put(ta_ids=[ta], mode="remove").status_code == 200 and ta_ids() == [[], []]
+    assert put(ta_ids=[], mode="add").status_code == 422
+    assert put(ta_ids=[9999]).status_code == 422
+    assert client.put("/submissions/bulk/assignment", json={"submission_ids": [999], "ta_ids": []}).status_code == 404

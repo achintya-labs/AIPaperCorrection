@@ -1,5 +1,7 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -40,6 +42,16 @@ class SubmissionOut(BaseModel):
 
 class AssignIn(BaseModel):
     ta_ids: list[int]
+
+
+class BulkAssignIn(BaseModel):
+    submission_ids: list[int] = Field(min_length=1)
+    ta_ids: list[int]
+    mode: Literal["replace", "add", "remove"] = "replace"
+
+
+class BulkAssignResult(BaseModel):
+    updated: int
 
 
 def visible_submissions(user: User):
@@ -125,6 +137,34 @@ def list_submissions(
 @router.get("/submissions/{submission_id}", response_model=SubmissionOut)
 def get_submission(sub: Submission = Depends(get_visible_submission)):
     return sub
+
+
+@router.put(
+    "/submissions/bulk/assignment",
+    response_model=BulkAssignResult,
+    dependencies=[Depends(require_admin)],
+)
+def assign_selected(body: BulkAssignIn, db: Session = Depends(get_db)):
+    """Assign TAs to several papers at once: replace each paper's TAs, add to them, or remove from them."""
+    ids = set(body.submission_ids)
+    subs = db.scalars(select(Submission).options(selectinload(Submission.tas)).where(Submission.id.in_(ids))).all()
+    if len(subs) != len(ids):
+        raise HTTPException(404, "Submission not found")
+    ta_ids = set(body.ta_ids)
+    if not ta_ids and body.mode != "replace":
+        raise HTTPException(422, "Choose at least one TA")
+    tas = db.scalars(select(User).where(User.id.in_(ta_ids), User.active)).all() if ta_ids else []
+    if len(tas) != len(ta_ids):
+        raise HTTPException(422, "Unknown or inactive TA")
+    for sub in subs:
+        if body.mode == "replace":
+            sub.tas = list(tas)
+        elif body.mode == "add":
+            sub.tas = [*sub.tas, *(t for t in tas if t not in sub.tas)]
+        else:
+            sub.tas = [t for t in sub.tas if t.id not in ta_ids]
+    db.commit()
+    return BulkAssignResult(updated=len(subs))
 
 
 @router.put(

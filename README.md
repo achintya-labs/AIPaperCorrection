@@ -39,7 +39,7 @@ cp .env.example .env     # set CLAUDE_RUNNER_TOKEN (openssl rand -hex 32), JWT_S
 ```
 
 Open **https://localhost:8443** (self-signed: the browser warns once) and sign in with the bootstrap admin. Then:
-create an exam → write its rubric → import papers → they are graded by the worker → TAs review from **My queue**.
+create an exam → write its rubric → import papers → start grading (per paper, a selection, or everything) → the worker grades them → TAs review from **My queue**.
 Optional: sign-in with Google ([how-it-runs.md](docs/how-it-runs.md#sign-in-with-google)).
 
 **No containers, no root?** `./run.sh --native` runs the same system from Python + Node with a SQLite file

@@ -19,7 +19,6 @@ from app.auth import require_admin
 from app.config import get_settings
 from app.db import get_db
 from app.models import Exam, Role, SplitJob, SplitJobStatus, Student, Submission, SubmissionStatus, User
-from app.routes.exams import latest_rubric
 from app.storage import Storage, get_storage
 
 router = APIRouter(tags=["import"], dependencies=[Depends(require_admin)])
@@ -158,7 +157,6 @@ async def import_submissions(
         s.student.external_id
         for s in db.scalars(select(Submission).where(Submission.exam_id == exam_id))
     }
-    rubric = latest_rubric(db, exam_id)
 
     items: list[ImportItem] = []
     plan: list[tuple[ImportItem, bytes, list[User]]] = []
@@ -216,8 +214,8 @@ async def import_submissions(
                 student_id=student.id,
                 pdf_path=key,
                 tas=tas,
-                # Being queued is what enqueues the job; grading needs a rubric to exist.
-                status=SubmissionStatus.queued if rubric else SubmissionStatus.uploaded,
+                # Grading is started by an admin (per paper or in bulk), never automatically.
+                status=SubmissionStatus.uploaded,
             )
             db.add(sub)
             db.flush()
@@ -550,7 +548,6 @@ async def commit_auto_split_import(
         raise HTTPException(422, str(e))
 
     existing = set(_existing_student_ids(db, exam_id))
-    rubric = latest_rubric(db, exam_id)
 
     items: list[ImportItem] = []
     plan: list[tuple[ImportItem, str, bytes, list[User]]] = []
@@ -587,7 +584,7 @@ async def commit_auto_split_import(
                 student_id=student.id,
                 pdf_path=sub_key,
                 tas=tas,
-                status=SubmissionStatus.queued if rubric else SubmissionStatus.uploaded,
+                status=SubmissionStatus.uploaded,
             )
             db.add(sub)
             db.flush()

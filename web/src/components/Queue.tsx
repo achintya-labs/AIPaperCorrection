@@ -87,7 +87,7 @@ export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
           </select>
         </div>
       </div>
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card table-card">
         {shown.length === 0 ? (
           q.trim() ? <NoMatches query={q} onClear={() => setQ("")} /> : <p className="muted" style={{ padding: "1rem" }}>Nothing here.</p>
         ) : (

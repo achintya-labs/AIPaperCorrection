@@ -57,18 +57,18 @@ def test_import_by_filename_with_csv_multi_ta(client, storage):
     subs = {s["student"]["external_id"]: s for s in client.get("/submissions").json()}
     assert subs["s1"]["student"]["name"] == "Ann" and len(subs["s1"]["ta_ids"]) == 2
     assert len(subs["s2"]["ta_ids"]) == 1
-    # No rubric yet, so nothing is queued for grading.
+    # Grading is never started automatically.
     assert subs["s1"]["status"] == "uploaded"
     with TestSession() as s:
         key = s.query(Submission).first().pdf_path
     assert key.startswith(f"submissions/{exam_id}/") and storage.exists(key)
 
 
-def test_queued_when_rubric_exists(client, storage):
+def test_not_queued_even_when_rubric_exists(client, storage):
     exam_id = make_exam(client)
     client.post(f"/exams/{exam_id}/rubrics", json=RUBRIC)
     upload(client, exam_id, [("s1.pdf", make_pdf())])
-    assert client.get("/submissions").json()[0]["status"] == SubmissionStatus.queued.value
+    assert client.get("/submissions").json()[0]["status"] == SubmissionStatus.uploaded.value
 
 
 def test_reimport_conflicts_and_bad_pdf(client, storage):

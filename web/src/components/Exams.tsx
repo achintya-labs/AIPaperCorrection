@@ -62,7 +62,7 @@ export default function Exams() {
         <SearchBox value={q} onChange={setQ} label="Search exams" placeholder="Search exams"
           shown={visible.length} total={exams.length} />
       )}
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card table-card">
         {!exams ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : exams.length === 0 ? (
           <p className="muted" style={{ padding: "1rem" }}>No exams yet.</p>
         ) : visible.length === 0 ? (

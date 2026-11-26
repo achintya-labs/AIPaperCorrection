@@ -108,6 +108,8 @@ def test_every_route_has_expected_auth_dependency(client):
         ("POST", "/exams/{exam_id}/imports/auto-split/{split_token}/commit"),
         ("POST", "/exams/{exam_id}/queue"),
         ("POST", "/submissions/{submission_id}/regrade"),
+        ("POST", "/submissions/bulk/grade"),
+        ("PUT", "/submissions/bulk/assignment"),
         ("GET", "/grader/status"),
         ("GET", "/exams/{exam_id}/export.csv"),
         ("GET", "/exams/{exam_id}/export.zip"),

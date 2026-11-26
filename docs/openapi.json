@@ -227,6 +227,94 @@
         "title": "Body_import_submissions_exams__exam_id__imports_post",
         "type": "object"
       },
+      "BulkAssignIn": {
+        "properties": {
+          "mode": {
+            "default": "replace",
+            "enum": [
+              "replace",
+              "add",
+              "remove"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "submission_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Submission Ids",
+            "type": "array"
+          },
+          "ta_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Ta Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "submission_ids",
+          "ta_ids"
+        ],
+        "title": "BulkAssignIn",
+        "type": "object"
+      },
+      "BulkAssignResult": {
+        "properties": {
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "title": "BulkAssignResult",
+        "type": "object"
+      },
+      "BulkGradeIn": {
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "submission_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Submission Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "submission_ids"
+        ],
+        "title": "BulkGradeIn",
+        "type": "object"
+      },
+      "BulkGradeResult": {
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "skipped"
+        ],
+        "title": "BulkGradeResult",
+        "type": "object"
+      },
       "Criterion": {
         "properties": {
           "description": {
@@ -2822,7 +2910,7 @@
     },
     "/exams/{exam_id}/queue": {
       "post": {
-        "description": "Queue every submission that is waiting (uploaded, e.g. imported before the rubric) or failed.",
+        "description": "Grade everything that hasn't been graded: queue every submission that is uploaded or failed.",
         "operationId": "queue_exam_exams__exam_id__queue_post",
         "parameters": [
           {
@@ -3338,6 +3426,126 @@
         "summary": "List Submissions",
         "tags": [
           "submissions"
+        ]
+      }
+    },
+    "/submissions/bulk/assignment": {
+      "put": {
+        "description": "Assign TAs to several papers at once: replace each paper's TAs, add to them, or remove from them.",
+        "operationId": "assign_selected_submissions_bulk_assignment_put",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkAssignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkAssignResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Selected",
+        "tags": [
+          "submissions"
+        ]
+      }
+    },
+    "/submissions/bulk/grade": {
+      "post": {
+        "description": "Start grading (or regrading) the chosen papers with the latest rubric. Papers already queued or being\ngraded are skipped, and so are papers with TA-reviewed grades unless force=true.",
+        "operationId": "grade_selected_submissions_bulk_grade_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkGradeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkGradeResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grade Selected",
+        "tags": [
+          "grading"
         ]
       }
     },

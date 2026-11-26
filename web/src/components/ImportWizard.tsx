@@ -252,7 +252,7 @@ export default function ImportWizard({ examId }: { examId: number }) {
 
       {result && !result.dry_run ? (
         <div className="stack">
-          <Alert tone={result.created ? "ok" : "warn"}>Imported {result.created} paper{result.created === 1 ? "" : "s"}. Papers go to grading as soon as the exam has a rubric — use “Queue waiting” on the Papers tab if you imported before writing one.</Alert>
+          <Alert tone={result.created ? "ok" : "warn"}>Imported {result.created} paper{result.created === 1 ? "" : "s"}. Grading doesn't start automatically: use “Grade all” or select papers on the Papers tab when you're ready.</Alert>
           <ImportTable items={result.items} />
           <div className="actionbar"><button onClick={reset}>Import more</button></div>
         </div>

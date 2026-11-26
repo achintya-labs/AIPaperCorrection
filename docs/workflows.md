@@ -57,14 +57,15 @@ flowchart TD
     A5 --> B1
     B4 --> C1
     C5 --> D1
-    C6 --> E1["Admin: Queue waiting and failed,<br/>or fix the cause first"]
+    C6 --> E1["Admin: Grade all,<br/>or fix the cause first"]
     E1 --> C1
     D8 --> F1["Admin: export CSV"]
 ```
 
 Notes:
-- Papers imported **before** a rubric exists stay `uploaded`; use *Queue waiting & failed* on the exam's
-  Papers tab (`POST /exams/{id}/queue`) after saving the rubric.
+- Imported papers always stay `uploaded`; grading is started by an admin on the exam's Papers tab: *Grade* on one
+  paper, *Grade selected* on a ticked set (`POST /submissions/bulk/grade`), or *Grade all* (`POST /exams/{id}/queue`).
+  A rubric must exist first. Selected papers can also be assigned to TAs in one step (`PUT /submissions/bulk/assignment`).
 - An admin can regrade any finished paper later (see [state diagram](#2-submission-states)).
 
 ---
@@ -77,10 +78,9 @@ no separate queue table.
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> queued: import with rubric
-    [*] --> uploaded: import, no rubric
+    [*] --> uploaded: import
 
-    uploaded --> queued: queue
+    uploaded --> queued: grade (one, selected, or all)
     queued --> grading: worker claims
     grading --> ready_for_review: saved
     grading --> failed: error
@@ -97,7 +97,8 @@ Rules behind the arrows:
 
 | Transition | Where | Condition |
 |---|---|---|
-| import → `queued` / `uploaded` | `routes/imports.py` | `queued` only if the exam already has a rubric |
+| import → `uploaded` | `routes/imports.py` | Always; grading is never started by an import |
+| `uploaded`/`failed`/finished → `queued` | `routes/grading.py` | Admin action; needs a rubric. Bulk and regrade skip papers already queued/grading, and TA-reviewed ones without `force` |
 | `queued` → `grading` | `jobs/queue.py: claim_next` | `SELECT … FOR UPDATE SKIP LOCKED`, oldest id first; sets `claimed_at` |
 | `grading` → `queued` (worker restarted) | `jobs/queue.py: recover_own` | At worker start-up: jobs this worker (`claimed_by` = its container hostname or `WORKER_ID`) had claimed. Immediate |
 | `grading` → `queued` (stale) | `jobs/queue.py: recover_stale` | Anyone's job with `claimed_at` older than `GRADER_TIMEOUT_SECONDS × GRADER_MAX_ATTEMPTS + 120 s`; checked every minute |
@@ -412,7 +413,7 @@ flowchart TD
     ALT --> OK
     L -- yes --> OK["ready true<br/>papers grade normally"]
     N1 -. "papers imported meanwhile" .-> F["Fail with: Claude is not logged in.<br/>Run claude-login.sh"]
-    F --> R["After login: Queue waiting and failed"]
+    F --> R["After login: Grade all"]
     R --> OK
 ```
 
