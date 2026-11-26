@@ -1,4 +1,4 @@
-FROM docker.io/library/node:22-slim AS build
+FROM docker.io/library/node:25-slim AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -6,7 +6,7 @@ COPY . .
 ENV ASTRO_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM docker.io/library/node:22-slim
+FROM docker.io/library/node:25-slim
 WORKDIR /app
 ENV HOST=0.0.0.0 PORT=4321 NODE_ENV=production
 COPY package*.json ./
