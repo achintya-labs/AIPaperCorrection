@@ -299,10 +299,10 @@ def test_other_users_names_follow_the_directory_in_the_background(sso, monkeypat
     from app.auth import sso as sso_mod
     from sqlalchemy import select
     c, d = sso
-    monkeypatch.setattr(sso_mod, "_last_sync", 0.0)
+    monkeypatch.setattr(sso_mod, "_last_sync", float("-inf"))
     assert c.get("/auth/me", headers={"Remote-Email": "admin@x.io"}).status_code == 200  # first sync
     d.users["ta@x.io"] = DirUser("ta", "ta@x.io", "Tia Renamed", Role.ta)
-    monkeypatch.setattr(sso_mod, "_last_sync", 0.0)  # a minute passes
+    monkeypatch.setattr(sso_mod, "_last_sync", float("-inf"))  # a minute passes
     assert c.get("/auth/me", headers={"Remote-Email": "admin@x.io"}).status_code == 200
     with TestSession() as db:
         assert db.scalar(select(User.name).where(User.email == "ta@x.io")) == "Tia Renamed"

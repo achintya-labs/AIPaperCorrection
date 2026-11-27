@@ -113,7 +113,7 @@ def deactivate_cached(db: Session, email: str) -> None:
 
 
 _SYNC_EVERY = 60.0  # seconds between background full syncs
-_last_sync = 0.0
+_last_sync = float("-inf")  # time.monotonic() can be small (fresh VM), so 0 would not mean "long ago"
 _sync_lock = threading.Lock()
 
 
