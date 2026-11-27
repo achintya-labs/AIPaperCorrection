@@ -93,7 +93,7 @@ browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, option
 - **The `users` table is only a cache** that papers, grades and assignments point at. Rows follow LDAP (name, role, enrolled or not)
   and are matched by LDAP uid, else by case-insensitive email. There are no passwords, no Google sign-in and no login page in the
   app; the Admin page's Users section is a read-only directory list with a link to LLDAP. TAs who never signed in can still be assigned
-  (listing users and importing sync the directory into the cache first).
+  (listing users and importing sync the directory into the cache first). Renames, email and role changes made in LLDAP reach the cache by themselves: any authenticated request triggers a full directory sync at most once a minute per API process, so names shown in the app lag LLDAP by about a minute.
 - **Why the headers can be trusted:** `web` and `api` publish no port and sit on a private network where only `caddy` reaches `web`; Caddy's
   `forward_auth` sets the `Remote-*` headers from Tinyauth's answer. `AUTH_MODE=local` (below) does not rely on any of that.
 - **Moving an older install:** `./run.sh up` on an `.env` with no `AUTH_MODE` switches it to sso, generates the gateway secrets and starts

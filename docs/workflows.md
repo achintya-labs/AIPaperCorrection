@@ -68,7 +68,8 @@ flowchart TD
 Notes:
 - Imported papers always stay `uploaded`; grading is started by an admin on the exam's Papers tab: *Grade* on one
   paper, *Grade selected* on a ticked set (`POST /submissions/bulk/grade`), or *Grade all* (`POST /exams/{id}/queue`).
-  A rubric must exist first. Selected papers can also be assigned to TAs in one step (`PUT /submissions/bulk/assignment`).
+  A rubric must exist first. Selected papers can also be assigned to TAs in one step (`PUT /submissions/bulk/assignment`): add, set or remove TAs, or `round_robin`, which deals the
+  papers out in turn (by id) across the chosen TAs on top of whoever is already assigned.
 - An admin can regrade any finished paper later (see [state diagram](#2-submission-states)).
 
 ---
@@ -533,7 +534,7 @@ flowchart TD
     B -- "remove access" --> F["Remove from both groups, or delete the user"]
     B -- "name / email / password" --> G["Edit the user (the id can't change)"]
 
-    D --> S["App: within ~30 s the Admin page and TA pickers list them<br/>(listing users syncs the directory into the cache, even before they ever sign in)"]
+    D --> S["App: within ~1 min the Admin page and TA pickers list them<br/>(a background sync on requests, at most once a minute, plus listing users and importing, copies the directory into the cache, even before they ever sign in)"]
     E --> S2["App: role changes on their next request"]
     F --> S3["App: next request is 403 not enrolled; cached row deactivated;<br/>papers, grades and review history stay"]
     G --> S4["App: name follows; email changes keep the same account<br/>because the row is matched by LDAP uid first"]

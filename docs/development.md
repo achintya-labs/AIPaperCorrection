@@ -28,8 +28,8 @@ the requirements change; it is idempotent. Python 3.12 is what the images use; n
 | `make test` | The checks the commit hook and CI run: API tests, web unit tests, type check, `openapi.json` check |
 | `make test-api` / `make test-web` | One half only |
 | `make test-pg` | The Postgres-only tests against a throwaway container (podman or docker) |
-| `make up` / `make down` / `make restart` | Start, stop and remove containers, restart them (volumes and data are kept) |
-| `make rebuild` | Rebuild the `api`, `worker` and `web` images and recreate those containers |
+| `make up` / `make down` / `make restart` | `./run.sh up/down/restart`: start, stop and remove containers, restart them (volumes and data are kept); also `make pull`, `pullup`, `migrate`, `logs`, `ps`, all via `./run.sh` |
+| `make rebuild` | Rebuild the `api`, `worker`, `web` and `claude` images and recreate those containers |
 | `make logs` / `make ps` | Follow logs, list containers |
 | `make ci-lint` | Lint the GitHub workflows offline |
 

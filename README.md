@@ -83,7 +83,7 @@ also says when a newer release is out.
 2. **Import** the scans: one PDF per student named `<roll>.pdf`, or one combined PDF with a CSV of page ranges, or *auto-split* (Claude finds
    the boundaries and roll numbers). Preview first, assign TAs while importing or later.
 3. **Papers tab:** nothing is graded automatically. *Grade* one paper, tick several and *Grade selected*, or *Grade all ungraded*.
-   Tick papers to assign TAs in bulk, export PDFs (graded papers annotated, ungraded as the original scan), or delete.
+   Tick papers to assign TAs in bulk (add, set, remove, or deal them out round robin across chosen TAs), export PDFs (graded papers annotated, ungraded as the original scan), or delete.
 4. Papers go `uploaded` → `queued` → `grading` → `ready for review`. Check Claude's remaining plan quota with **Admin → Models → Check quota**.
 5. Export grades (CSV) and annotated PDFs (ZIP) from the Papers tab when the TAs are done.
 
