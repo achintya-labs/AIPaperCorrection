@@ -61,7 +61,7 @@ class BulkDeleteResult(BaseModel):
 class BulkAssignIn(BaseModel):
     submission_ids: list[int] = Field(min_length=1)
     ta_ids: list[int]
-    mode: Literal["replace", "add", "remove"] = "replace"
+    mode: Literal["replace", "add", "remove", "round_robin"] = "replace"
 
 
 class BulkAssignResult(BaseModel):
@@ -192,6 +192,15 @@ def assign_selected(body: BulkAssignIn, db: Session = Depends(get_db)):
     tas = db.scalars(select(User).where(User.id.in_(ta_ids), User.active)).all() if ta_ids else []
     if len(tas) != len(ta_ids):
         raise HTTPException(422, "Unknown or inactive TA")
+    if body.mode == "round_robin":
+        # Deal the papers out in turn (by id, so repeating it is predictable), keeping each paper's existing TAs.
+        order = sorted(tas, key=lambda t: t.id)
+        for i, sub in enumerate(sorted(subs, key=lambda s: s.id)):
+            ta = order[i % len(order)]
+            if ta not in sub.tas:
+                sub.tas = [*sub.tas, ta]
+        db.commit()
+        return BulkAssignResult(updated=len(subs))
     for sub in subs:
         if body.mode == "replace":
             sub.tas = list(tas)

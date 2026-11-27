@@ -18,7 +18,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   const [editing, setEditing] = useState<{ id: number; ids: Set<number> } | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [bulkTas, setBulkTas] = useState<number[]>([]);
-  const [bulkMode, setBulkMode] = useState<"replace" | "add" | "remove">("add");
+  const [bulkMode, setBulkMode] = useState<"replace" | "add" | "remove" | "round_robin">("add");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(
@@ -185,7 +185,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
       const r = await api<{ updated: number }>(`/submissions/bulk/assignment`, {
         method: "PUT", json: { submission_ids: ids, ta_ids: bulkTas, mode: bulkMode },
       });
-      setInfo(`TAs ${{ replace: "set on", add: "added to", remove: "removed from" }[bulkMode]} ${r.updated} paper${r.updated === 1 ? "" : "s"}.`);
+      setInfo(`TAs ${{ replace: "set on", add: "added to", remove: "removed from", round_robin: "dealt round robin across" }[bulkMode]} ${r.updated} paper${r.updated === 1 ? "" : "s"}.`);
       await load();
     } catch (e) { setError(errMsg(e)); } finally { setBusy(false); }
   }
@@ -230,7 +230,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
           <div className="bulk-assign">
             <div className="bulk-mode">
               <SelectMenu value={bulkMode} onChange={setBulkMode} ariaLabel="How to apply TAs" minWidth={130}
-                options={[{ value: "add", label: "Add TAs" }, { value: "replace", label: "Set TAs" }, { value: "remove", label: "Remove TAs" }]} />
+                options={[{ value: "add", label: "Add TAs" }, { value: "round_robin", label: "Round robin" }, { value: "replace", label: "Set TAs" }, { value: "remove", label: "Remove TAs" }]} />
             </div>
             <div className="bulk-ta"><TaMultiSelect tas={tas} selected={bulkTas} onChange={setBulkTas} /></div>
             <button type="button" onClick={assignSelected} disabled={busy || (bulkTas.length === 0 && bulkMode !== "replace")}>Apply</button>

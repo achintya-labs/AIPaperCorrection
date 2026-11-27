@@ -1,6 +1,10 @@
 #!/usr/bin/env sh
 # Paper Grader launcher. Podman + podman-compose only.
 #
+# Use run.sh, not a bare `podman-compose`: run.sh adds the project name and the --profile for your AUTH_MODE (a bare call without a profile
+# starts only db, claude, api, worker and web: no gateway, no published port, nothing reachable), builds or pulls the images, makes the
+# certificate and runs the one-time user-directory setup first.
+#
 #   ./run.sh up        start (or recreate) everything:            podman-compose up -d --force-recreate
 #   ./run.sh down      stop and remove the containers:            podman-compose down
 #   ./run.sh restart   down, then up
@@ -215,6 +219,9 @@ elif [ -z "$(env_get AUTH_MODE)" ]; then
 fi
 AUTH_MODE=$(env_get AUTH_MODE)
 case "$AUTH_MODE" in sso|local) ;; *) die "AUTH_MODE in .env must be sso or local (found '$AUTH_MODE')" ;; esac
+# Keep COMPOSE_PROFILES equal to AUTH_MODE: podman-compose (and docker compose) read it from .env, so even a bare `podman-compose up` starts the
+# right services instead of silently leaving out the gateway.
+[ "$(env_get COMPOSE_PROFILES)" = "$AUTH_MODE" ] || setenv COMPOSE_PROFILES "$AUTH_MODE"
 if [ "$AUTH_MODE" = sso ] && [ "$CREATED_ENV" = 0 ] && { [ -z "$(env_get LLDAP_JWT_SECRET)" ] || [ -n "$DOMAIN_ARG$HTTPS_PORT_ARG" ]; }; then
   # Upgrading an older install (no gateway secrets yet) or an explicit --domain/--https-port: (re)write the sso settings.
   if [ -z "$(env_get LLDAP_JWT_SECRET)" ]; then d=${DOMAIN_ARG:-lan.internal}; p=${HTTPS_PORT_ARG:-5904}
@@ -341,6 +348,14 @@ sso_setup() {
   i=0; until compose exec -T lldap /app/lldap healthcheck --config-file /data/lldap_config.toml >/dev/null 2>&1; do
     i=$((i+1)); [ "$i" -lt 90 ] || die "LLDAP did not become ready (./run.sh logs lldap)"; sleep 1
   done
+  # The bootstrap logs in as `admin` with LLDAP_ADMIN_PASSWORD from .env. LLDAP reads that password only when it first creates `admin`, so if
+  # LLDAP now answers 401 the admin password has been changed since: the directory has been set up and is in use, and there is nothing
+  # for the bootstrap to do (it would just die with "jq: parse error: Invalid numeric literal"). Skip it.
+  code=$(compose exec -T lldap sh -c 'curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"$LLDAP_LDAP_USER_PASS\"}" http://localhost:17170/auth/simple/login' 2>/dev/null || true)
+  if [ "$code" = 401 ]; then
+    echo "The LLDAP admin password has been changed from .env: the user directory is already set up, skipping its bootstrap."
+    return 0
+  fi
   log=$(mktemp)
   if ! compose_setup run --rm -T --no-deps lldap-bootstrap > "$log" 2>&1; then
     tail -n 25 "$log" >&2

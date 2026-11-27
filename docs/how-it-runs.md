@@ -26,7 +26,7 @@ In a release bundle it pulls the published images (tag `latest`); in a git check
 
 | Command | Runs |
 |---|---|
-| `./run.sh up` | `podman-compose up -d --force-recreate` |
+| `./run.sh up` | the one-time user-directory setup, then `podman-compose up -d --force-recreate` with the project name and `--profile` for your `AUTH_MODE`. **Don't call `podman-compose` directly**: without a profile it starts only `db`, `claude`, `api`, `worker` and `web` (no gateway, no published port) |
 | `./run.sh down` | `podman-compose down` |
 | `./run.sh restart` | `down`, then `up` |
 | `./run.sh pull` | `podman-compose pull` (release bundles only) |
@@ -563,5 +563,6 @@ the repository yet; see [libraries.md](libraries.md#testing-and-quality).
 | "The user directory is unavailable" (503) | The app can't reach LLDAP: `./run.sh logs lldap`; check `LDAP_OBSERVER_PASSWORD` matches (it is applied by `lldap-bootstrap` on every `up`) |
 | `./run.sh up` stalls with `lldap-bootstrap`, `tinyauth`, `caddy` at "Created" | They wait for `lldap` to be *healthy*. Check `./run.sh logs lldap` (Postgres reachable? `lldap-db-init` exited 0?) |
 | Someone's password: "I can't sign in after migrating" | Migrated accounts have **no password**. Set one in LLDAP (Users, the person, Modify password), or whitelist their email for Google sign-in |
+| `./run.sh up` printed "The LLDAP admin password has been changed from .env: the user directory is already set up, skipping its bootstrap." | Expected after someone changed the `admin` password in LLDAP: LLDAP reads `LLDAP_ADMIN_PASSWORD` only when it first creates `admin`, so the bootstrap (read-only account, groups) can no longer log in and is skipped; it had already done its work. Older `run.sh` versions died here with `jq: parse error: Invalid numeric literal` because LLDAP's 401 answer is plain text |
 | After a reboot or `podman restart`: `Starting some container dependencies … the following dependencies of container … are not running: … container state improper` | The containers were created by an older version in which `tinyauth`, `lldap` and `caddy` were tied (`--requires`) to the one-shot `lldap-db-init` / `lldap-bootstrap`, which have exited, so Podman can't restart them. Fix: `./run.sh down && ./run.sh up` (data stays in the volumes). The current compose file has no such dependency and `up` runs the one-shots first, so it doesn't recur |
 | Error "missing networks" / "profile" from podman-compose | Use `./run.sh` (or `./run.sh compose <args>` for anything else), which passes the right `--profile`; a plain `podman-compose` call sees only the services without a profile |

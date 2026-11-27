@@ -234,7 +234,8 @@
             "enum": [
               "replace",
               "add",
-              "remove"
+              "remove",
+              "round_robin"
             ],
             "title": "Mode",
             "type": "string"

@@ -293,3 +293,16 @@ def test_directory_does_not_list_two_people_with_one_email(ldap_dir):
     ldap_dir._connect = with_twin
     emails = [u.email for u in ldap_dir.members()]
     assert "tia@x.io" not in emails and "ann@x.io" in emails
+
+
+def test_other_users_names_follow_the_directory_in_the_background(sso, monkeypatch):
+    from app.auth import sso as sso_mod
+    from sqlalchemy import select
+    c, d = sso
+    monkeypatch.setattr(sso_mod, "_last_sync", 0.0)
+    assert c.get("/auth/me", headers={"Remote-Email": "admin@x.io"}).status_code == 200  # first sync
+    d.users["ta@x.io"] = DirUser("ta", "ta@x.io", "Tia Renamed", Role.ta)
+    monkeypatch.setattr(sso_mod, "_last_sync", 0.0)  # a minute passes
+    assert c.get("/auth/me", headers={"Remote-Email": "admin@x.io"}).status_code == 200
+    with TestSession() as db:
+        assert db.scalar(select(User.name).where(User.email == "ta@x.io")) == "Tia Renamed"

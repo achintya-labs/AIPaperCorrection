@@ -64,7 +64,9 @@ def _sso_user(remote_email: str | None, remote_name: str | None, db: Session, di
     if entry is None or entry.role is None:
         sso.deactivate_cached(db, email)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Your account is not enrolled in Paper Grader")
-    return sso.sync_user(db, entry, (remote_name or "").strip()[:255])
+    user = sso.sync_user(db, entry, (remote_name or "").strip()[:255])
+    sso.sync_directory_if_due(db, directory)
+    return user
 
 
 def current_user(

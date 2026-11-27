@@ -7,6 +7,8 @@ their id and their work), and created, renamed, re-roled or deactivated to follo
 
 from fastapi import HTTPException, status
 import logging
+import threading
+import time
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -108,3 +110,29 @@ def deactivate_cached(db: Session, email: str) -> None:
     for u in db.scalars(select(User).where(func.lower(User.email) == email.lower(), User.active)):
         u.active = False
     db.commit()
+
+
+_SYNC_EVERY = 60.0  # seconds between background full syncs
+_last_sync = 0.0
+_sync_lock = threading.Lock()
+
+
+def sync_directory_if_due(db: Session, directory: Directory, every: float = _SYNC_EVERY) -> None:
+    """Keep every cached row (names, emails, roles, active) following the directory without anyone asking: called on
+    requests, it does a full sync at most once per `every` seconds per process. A directory outage is not the caller's problem."""
+    global _last_sync
+    now = time.monotonic()
+    if now - _last_sync < every or not _sync_lock.acquire(blocking=False):
+        return
+    try:
+        if now - _last_sync < every:
+            return
+        _last_sync = now
+        sync_directory(db, directory)
+    except HTTPException:
+        log.warning("periodic directory sync skipped: directory unavailable")
+    except Exception:
+        db.rollback()
+        log.exception("periodic directory sync failed")
+    finally:
+        _sync_lock.release()

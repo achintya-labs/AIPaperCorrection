@@ -315,8 +315,9 @@ everyone). **200** → `SubmissionOut`. **404** submission. **422** if any id is
 ### `PUT /submissions/bulk/assignment`
 Admin. Assigns TAs to several papers at once. Body `{"submission_ids": [3, 4], "ta_ids": [2, 5], "mode": "replace"}`.
 `mode` is `replace` (default: each paper's TAs become exactly `ta_ids`; `[]` unassigns), `add` (keep the current TAs and
-add these) or `remove` (take these off). **200** → `{"updated": 2}`. **404** if any submission is unknown.
-**422** unknown/inactive TA, or `add`/`remove` with no TAs.
+add these), `remove` (take these off) or `round_robin` (deal the papers out in turn, by id, across the chosen TAs, adding each to
+that paper's existing TAs). **200** → `{"updated": 2}`. **404** if any submission is unknown.
+**422** unknown/inactive TA, or `add`/`remove`/`round_robin` with no TAs.
 
 ### `POST /submissions/bulk/delete`
 Admin. Permanently deletes several papers (what `DELETE /submissions/{id}` does for one). Body
