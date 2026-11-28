@@ -7,18 +7,15 @@ import ExamSubmissions from "./ExamSubmissions";
 import ImportWizard from "./ImportWizard";
 import RubricEditor from "./RubricEditor";
 
-type Tab = "rubric" | "import" | "papers" | "advanced";
-const TABS: [Tab, string][] = [
-  ["rubric", "Rubric"],
-  ["import", "Import"],
-  ["papers", "Papers"],
-  ["advanced", "Advanced"],
-];
+import ExamOverview from "./ExamOverview";
+import { can, pickTab as chooseTab, visibleTabs, type ExamTab } from "../lib/access";
 
-export default function ExamAdmin({ id }: { id: number }) {
+export default function ExamAdmin({ id, permissions = [] }: { id: number; permissions?: string[] }) {
+  const TABS = visibleTabs(permissions); // only the tabs this person's role allows; the API refuses the rest as well
+  const mayDelete = can(permissions, "exams.delete");
   const [exam, setExam] = useState<Exam | null>(null);
   const [model, setModel] = useState("");
-  const [tab, setTab] = useState<Tab>("rubric");
+  const [tab, setTab] = useState<ExamTab | null>(null);
   const [tabReady, setTabReady] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -27,12 +24,10 @@ export default function ExamAdmin({ id }: { id: number }) {
 
   // Keep the chosen tab across reloads (and in the URL): #papers, #import, ...
   useEffect(() => {
-    const h = window.location.hash.slice(1);
-    const found = TABS.find(([k]) => k === h);
-    if (found) setTab(found[0]);
+    setTab(chooseTab(window.location.hash, permissions));
     setTabReady(true);
-  }, []);
-  const pickTab = (t: Tab) => {
+  }, [permissions.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickTab = (t: ExamTab) => {
     setTab(t);
     window.history.replaceState(null, "", `#${t}`);
   };
@@ -90,13 +85,15 @@ export default function ExamAdmin({ id }: { id: number }) {
       </div>
       {error && <Alert tone="bad">{error}</Alert>}
       <div className="tabs" role="tablist">
-        {TABS.map(([key, label]) => (
+        {TABS.map(({ key, label }) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => pickTab(key)}>{label}</button>
         ))}
       </div>
-      {tabReady && tab === "rubric" && <RubricEditor examId={id} />}
+      {tabReady && tab === "rubric" && <RubricEditor examId={id} canEdit={can(permissions, "rubric.edit")} />}
       {tabReady && tab === "import" && <ImportWizard examId={id} />}
-      {tabReady && tab === "papers" && <ExamSubmissions examId={id} />}
+      {tabReady && tab === "papers" && <ExamSubmissions examId={id} canManage={can(permissions, "papers.manage")} />}
+      {tabReady && tab === "overview" && <ExamOverview examId={id} canExport={can(permissions, "overview.export")} />}
+      {tabReady && !tab && <Alert tone="warn">Your role can't open any part of this exam.</Alert>}
       {tabReady && tab === "advanced" && (
         <div className="stack">
           <div className="card row" style={{ alignItems: "flex-end" }}>
@@ -115,13 +112,13 @@ export default function ExamAdmin({ id }: { id: number }) {
             <button onClick={saveModel} disabled={(exam.model_override ?? "") === model.trim()}>Save</button>
             {saved && <span className="small" style={{ color: "var(--ok)" }}>Saved. Applies to papers graded from now on.</span>}
           </div>
-          <div className="card row between">
+          {mayDelete && <div className="card row between">
             <div>
               <strong>Delete exam</strong>
               <div className="small muted">Permanently removes all rubric versions, papers, and grades in this exam.</div>
             </div>
             <button className="danger" onClick={removeExam}>Delete exam</button>
-          </div>
+          </div>}
         </div>
       )}
     </div>

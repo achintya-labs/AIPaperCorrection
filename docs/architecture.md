@@ -75,12 +75,13 @@ tighten this.
 ```
 api/app/
   main.py            app, CORS, bootstrap admin, routers
+  permissions.py     role -> permissions table (the one place to change what a role may do); stats.py: mean/std/histogram helpers
   config.py          Settings (env vars)
   db.py, models/     SQLAlchemy engine/session, all tables
   auth/              current_user (sso: Remote-Email -> directory; local: JWT cookie), require_admin, password hashing,
                      directory.py (LDAP: person by email, role from groups, listing), sso.py (users-table cache sync)
   export_ldap_users.py  one-off: prints existing users as LLDAP import lines (used by ./run.sh migrate)
-  routes/            auth, exams, submissions, imports, grading, review
+  routes/            auth, exams, overview, submissions, imports, grading, review
   pdf/               PyMuPDF helpers under a global lock: page_count, extract_ranges, render_pages
   storage/           Storage protocol + LocalStorage (path-traversal guarded)
   grader/            base (contracts, check_result, retry), claude_cli (providers/executors),
@@ -217,6 +218,8 @@ Uniqueness: one submission per `(exam, student)`, one grade per `(submission, qu
 | **Prompt-injection stance** | Student text is treated as data; the prompt says so and asks for lowered confidence if a paper tries to instruct the grader | `grader/claude_cli.py: PROMPT` |
 | **Browser → Astro → API proxy** | Same-origin cookie (no CORS), API not public, one TLS endpoint | `web/src/pages/api/[...path].ts` |
 | **Deleting is explicit and guarded**: papers and exams can be deleted by admins; anything holding TA-reviewed work needs `force`, a paper being graded can never be deleted, and rows are locked (`FOR UPDATE`) between the check and the delete so a worker can't claim one in between | Prevents a worker writing results for a paper that no longer exists, and accidental loss of review work. Files are removed after the commit, best effort | `deletion.py`, `routes/submissions.py`, `routes/exams.py` |
+| **Roles map to permissions in one table** (`api/app/permissions.py`); per-exam tabs are `tab.*` permissions, enforced on the API (`require_permission`) and mirrored in the UI from `permissions` on `/auth/me` (`web/src/lib/access.ts`) | A new role is one entry; opening a tab to it opens the endpoints behind it and nothing else. TAs get a read-only view: the Exams page, and inside an assigned exam the Papers, Rubric and Overview tabs (no grading, assignment, edits, deletion, imports or paper downloads; those are `papers.manage` and `rubric.edit`). User management and grader status stay `require_admin` | `permissions.py`, `auth/__init__.py`, `routes/*` |
+| **Overview statistics are computed on the server**, over the whole exam, with the same bins for plots and CSV | One implementation of "graded" (Claude's marks) vs "reviewed" (final marks of completed papers), so the page and the export always agree | `routes/overview.py`, `stats.py` |
 | **A TA only sees exams they are assigned to**: `GET /exams` and the rubric are filtered on the server, not just hidden in the UI | Exam names and model answers are not exposed to TAs who don't grade them; the exam selector follows assignments automatically | `routes/exams.py: visible_exams` |
 | **Table search is client-side** (`web/src/lib/search.ts`): all terms must match, case- and accent-insensitive | Lists are classroom-sized and already loaded; it is instant and needs no API. Revisit with server-side search/pagination if a list reaches thousands of rows | `web/src/components/SearchBox.tsx` |
 | **The cross-site check is our own and configured at runtime** (`ALLOWED_HOSTS`), not Astro's build-time one | A published Docker image can't know the deployer's hostname at build time; this makes one image work everywhere. The rule is the same as Astro's, with a host allow-list added, and is unit tested | `web/src/lib/csrf.ts`, `web/src/middleware.ts` |

@@ -33,7 +33,7 @@ def test_list_includes_activity_counts(env):
     assert u["ta@x.io"]["assigned_papers"] == 1 and u["ta@x.io"]["reviewed_grades"] == 1
     assert u["ta2@x.io"]["assigned_papers"] == 1 and u["ta2@x.io"]["reviewed_grades"] == 0
     assert u["out@x.io"]["assigned_papers"] == 0 and u["out@x.io"]["active"] is True
-    assert set(u["admin@x.io"]) == {"id", "email", "name", "role", "active", "has_password", "assigned_papers", "reviewed_grades"}
+    assert set(u["admin@x.io"]) == {"id", "email", "name", "role", "permissions", "active", "has_password", "assigned_papers", "reviewed_grades"}
 
 
 def test_role_change_takes_effect_immediately_on_the_same_session(env):

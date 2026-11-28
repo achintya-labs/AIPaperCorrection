@@ -12,6 +12,7 @@ from app.routes import auth as auth_routes
 from app.routes import exams as exam_routes
 from app.routes import grading as grading_routes
 from app.routes import imports as import_routes
+from app.routes import overview as overview_routes
 from app.routes import review as review_routes
 from app.routes import submissions as submission_routes
 
@@ -52,6 +53,7 @@ app.add_middleware(
 app.include_router(auth_routes.router)
 app.include_router(exam_routes.router)
 app.include_router(import_routes.router)
+app.include_router(overview_routes.router)
 app.include_router(grading_routes.router)
 app.include_router(review_routes.router)
 app.include_router(submission_routes.router)

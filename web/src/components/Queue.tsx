@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, errMsg } from "../lib/api";
 import type { Exam, Submission, SubmissionStatus, UserAdmin } from "../lib/types";
-import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
+import { Alert, ConfidenceBadge, DownloadIcon, Person, StatusBadge } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
 import SelectMenu from "./SelectMenu";
@@ -95,38 +95,61 @@ export default function Queue({ isAdmin = false }: { isAdmin?: boolean }) {
               <tr><th>Student</th><th>Exam</th><th>Status</th>{isAdmin && <th>TAs</th>}<th>Reviewed</th><th>Lowest confidence</th><th>Overall</th><th></th></tr>
             </thead>
             <tbody>
-              {shown.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <strong>{s.student.external_id}</strong>
-                    {s.student.name && <div className="muted small">{s.student.name}</div>}
-                  </td>
-                  <td className="wrap" style={{ minWidth: 120, maxWidth: 260 }}>{examName(s.exam_id)}</td>
-                  <td><StatusBadge status={s.status} /></td>
-                  {isAdmin && (
-                    <td className="tas-cell">
-                      <div className="tas-list">
-                        {s.ta_ids.length
-                          ? s.ta_ids.map((id) => taOf(id) ? <Person key={id} user={taOf(id)} /> : <span key={id} className="muted">#{id}</span>)
-                          : <span className="muted">unassigned</span>}
+              {shown.map((s) => {
+                const reviewable = ["ready_for_review", "reviewed"].includes(s.status);
+                const examTitle = examName(s.exam_id);
+                const studentTitle = s.student.name ? `${s.student.external_id} · ${s.student.name}` : s.student.external_id;
+                const openReview = () => { if (reviewable) window.location.href = `/review/${s.id}`; };
+                return (
+                  <tr
+                    key={s.id}
+                    className={reviewable ? "clickable-row" : undefined}
+                    tabIndex={reviewable ? 0 : undefined}
+                    title={reviewable ? `Open review for ${s.student.external_id}` : undefined}
+                    onClick={openReview}
+                    onKeyDown={(e) => {
+                      if (reviewable && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        openReview();
+                      }
+                    }}
+                  >
+                    <td className="student-cell">
+                      <div className="student-info" title={studentTitle}>
+                        <strong>{s.student.external_id}</strong>
+                        {s.student.name && <span className="muted small student-name">{s.student.name}</span>}
                       </div>
                     </td>
-                  )}
-                  <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
-                  <td><ConfidenceBadge value={s.min_confidence} /></td>
-                  <td><ConfidenceBadge value={s.overall_confidence} /></td>
-                  <td>
-                    <div className="row" style={{ justifyContent: "flex-end" }}>
-                      {["ready_for_review", "reviewed"].includes(s.status) && (
-                        <a className="btn" href={`/review/${s.id}`} style={{ minWidth: "4.75rem", textAlign: "center" }}>
-                          {s.status === "reviewed" ? "Open" : "Review"}
+                    <td className="exam-cell" title={examTitle}>{examTitle}</td>
+                    <td><StatusBadge status={s.status} /></td>
+                    {isAdmin && (
+                      <td className="tas-cell">
+                        <div className="tas-list">
+                          {s.ta_ids.length
+                            ? s.ta_ids.map((id) => taOf(id) ? <Person key={id} user={taOf(id)} /> : <span key={id} className="muted">#{id}</span>)
+                            : <span className="muted">unassigned</span>}
+                        </div>
+                      </td>
+                    )}
+                    <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
+                    <td><ConfidenceBadge value={s.min_confidence} /></td>
+                    <td><ConfidenceBadge value={s.overall_confidence} /></td>
+                    <td>
+                      <div className="actions-row">
+                        <a
+                          className="btn icon-action"
+                          href={`/api/submissions/${s.id}/export.pdf`}
+                          aria-label={`Export PDF for ${s.student.external_id}`}
+                          title="Export PDF"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <DownloadIcon />
                         </a>
-                      )}
-                      <a className="btn" href={`/api/submissions/${s.id}/export.pdf`}>PDF</a>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

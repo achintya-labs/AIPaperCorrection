@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { api, errMsg } from "../lib/api";
 import type { Exam } from "../lib/types";
 import { deleteExamFlow } from "../lib/actions";
-import { Alert } from "./ui";
+import { Alert, TrashIcon } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
+import { can } from "../lib/access";
 
-export default function Exams() {
+export default function Exams({ permissions = [] }: { permissions?: string[] }) {
+  const mayCreate = can(permissions, "exams.create");
+  const mayDelete = can(permissions, "exams.delete");
+  const mayGrade = can(permissions, "tab.papers"); // the grading-readiness banner is about grading, which only they do
   const [exams, setExams] = useState<Exam[] | null>(null);
   const [name, setName] = useState("");
   const [q, setQ] = useState("");
@@ -19,11 +23,13 @@ export default function Exams() {
   useEffect(() => {
     let alive = true;
     api<Exam[]>("/exams").then((x) => { if (alive) setExams(x); }).catch((e) => { if (alive) setError(errMsg(e)); });
-    api<{ provider?: string; ready: boolean; detail?: string }>("/grader/status")
-      .then((g) => { if (alive) setGrader(g); })
-      .catch(() => { if (alive) setGrader(null); });
+    if (mayGrade) {
+      api<{ provider?: string; ready: boolean; detail?: string }>("/grader/status")
+        .then((g) => { if (alive) setGrader(g); })
+        .catch(() => { if (alive) setGrader(null); });
+    }
     return () => { alive = false; };
-  }, []);
+  }, [mayGrade]);
 
   async function remove(x: Exam) {
     setError(""); setOk(""); setBusy(true);
@@ -57,13 +63,13 @@ export default function Exams() {
           To sign Claude in, run <span className="mono">./scripts/claude-login.sh</span> on the server (once), then reload this page.
         </Alert>
       )}
-      <form className="card row" onSubmit={create}>
+      {mayCreate && <form className="card row" onSubmit={create}>
         <div className="grow">
           <label htmlFor="exam-name">New exam</label>
           <input id="exam-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Physics 101 midterm" required />
         </div>
         <button className="primary" disabled={busy} style={{ alignSelf: "flex-end" }}>{busy ? "Creating…" : "Create"}</button>
-      </form>
+      </form>}
       {exams && exams.length > 0 && (
         <SearchBox value={q} onChange={setQ} label="Search exams" placeholder="Search exams"
           shown={visible.length} total={exams.length} />
@@ -75,15 +81,40 @@ export default function Exams() {
           <NoMatches query={q} onClear={() => setQ("")} />
         ) : (
           <table>
-            <thead><tr><th>Name</th><th>Model</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Model</th>{mayDelete && <th></th>}</tr></thead>
             <tbody>
-              {visible.map((x) => (
-                <tr key={x.id}>
-                  <td>{x.name}</td>
-                  <td className="mono small">{x.model_override ?? <span className="muted">default</span>}</td>
-                  <td><div className="row"><a className="btn" href={`/admin/exams/${x.id}`}>Manage</a><button type="button" className="danger" disabled={busy} onClick={() => remove(x)}>Delete</button></div></td>
-                </tr>
-              ))}
+              {visible.map((x) => {
+                const open = () => { window.location.href = `/admin/exams/${x.id}`; };
+                return (
+                  <tr
+                    key={x.id}
+                    className="clickable-row"
+                    tabIndex={0}
+                    role="link"
+                    onClick={open}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+                    }}
+                  >
+                    <td>{x.name}</td>
+                    <td className="mono small">{x.model_override ?? <span className="muted">default</span>}</td>
+                    {mayDelete && <td>
+                      <div className="actions-row">
+                        <button
+                          type="button"
+                          className="icon-action bad"
+                          disabled={busy}
+                          aria-label={`Delete ${x.name}`}
+                          title="Delete exam"
+                          onClick={(e) => { e.stopPropagation(); remove(x); }}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </td>}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

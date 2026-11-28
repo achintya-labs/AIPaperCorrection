@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
-import type { Submission, UserAdmin } from "../lib/types";
+import type { Submission, User } from "../lib/types";
 import { deletePaperFlow } from "../lib/actions";
 import { confirmBox, formBox } from "../lib/dialog";
-import { Alert, ConfidenceBadge, Person, StatusBadge } from "./ui";
+import { Alert, ConfidenceBadge, DownloadIcon, EditIcon, Person, PlayIcon, RegradeIcon, ReviewIcon, StatusBadge, TrashIcon, fmt } from "./ui";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
 import TaMultiSelect from "./TaMultiSelect";
 import SelectMenu from "./SelectMenu";
 
-export default function ExamSubmissions({ examId }: { examId: number }) {
+/** canManage false = read-only view (a TA): marks, status and assigned TAs, but no grading, assignment, edits, deletion,
+ * downloads or review links. The API refuses those calls to such roles as well. */
+export default function ExamSubmissions({ examId, canManage = false }: { examId: number; canManage?: boolean }) {
   const [subs, setSubs] = useState<Submission[] | null>(null);
-  const [tas, setTas] = useState<UserAdmin[]>([]);
+  const [tas, setTas] = useState<User[]>([]);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [q, setQ] = useState("");
@@ -22,16 +24,16 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(
-    () => api<Submission[]>(`/submissions?exam_id=${examId}`).then(setSubs).catch((e) => setError(errMsg(e))),
+    () => api<Submission[]>(`/submissions?exam_id=${examId}&scope=exam`).then(setSubs).catch((e) => setError(errMsg(e))),
     [examId],
   );
   useEffect(() => {
     let alive = true;
-    api<Submission[]>(`/submissions?exam_id=${examId}`)
+    api<Submission[]>(`/submissions?exam_id=${examId}&scope=exam`)
       .then((s) => { if (alive) setSubs(s); })
       .catch((e) => { if (alive) setError(errMsg(e)); });
-    api<UserAdmin[]>("/auth/users")
-      .then((u) => { if (alive) setTas(u.filter((x) => x.active && x.role === "ta")); })
+    api<User[]>("/auth/people")
+      .then((u) => { if (alive) setTas(u.filter((x) => x.role === "ta")); })
       .catch((e) => { if (alive) setError(errMsg(e)); });
     return () => { alive = false; };
   }, [examId]);
@@ -201,12 +203,12 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
     <div className="stack">
       <div className="row between">
         <h2 style={{ margin: 0 }}>Papers</h2>
-        <div className="row">
+        {canManage && <div className="row">
           <button type="button" className="primary" disabled={busy} onClick={queueWaiting} title="Grade every paper that is uploaded or failed">Grade all ungraded</button>
           <a className="btn" href={`/api/exams/${examId}/export.csv`}>Export grades (CSV)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip?raw=true`} title="The original scans of every paper, graded or not">Export raw PDFs (ZIP)</a>
           <a className="btn" href={`/api/exams/${examId}/export.zip`}>Export PDFs (ZIP)</a>
-        </div>
+        </div>}
       </div>
       {error && <Alert tone="bad">{error}</Alert>}
       {info && <Alert tone="ok">{info}</Alert>}
@@ -214,7 +216,7 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         <SearchBox value={q} onChange={setQ} label="Search papers" placeholder="Search student, TA, status"
           shown={visible.length} total={subs.length} />
       )}
-      {pickedCount > 0 && (
+      {canManage && pickedCount > 0 && (
         <div className="card bulkbar">
           <div className="bulk-top">
             <div className="row" style={{ gap: ".6rem" }}>
@@ -245,33 +247,40 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
         ) : (
           <table>
             <thead><tr>
-              <th style={{ width: 28 }}>
+              {canManage && <th style={{ width: 28 }}>
                 <input type="checkbox" aria-label="Select all shown papers" checked={allVisiblePicked}
                   onChange={(e) => setPicked((p) => { const n = new Set(p); visible.forEach((v) => e.target.checked ? n.add(v.id) : n.delete(v.id)); return n; })} />
-              </th><th>Student</th><th>Status</th><th>Progress</th><th>Confidence</th><th>TAs</th><th></th></tr></thead>
+              </th>}<th>Student</th><th>Status</th><th>Marks</th><th>Min confidence</th><th>Overall</th><th>TAs</th>{canManage && <th></th>}</tr></thead>
             <tbody>
               {visible.map((s) => (
                 <tr key={s.id}>
-                  <td><input type="checkbox" aria-label={`Select ${s.student.external_id}`} checked={picked.has(s.id)} onChange={(e) => toggle(s.id, e.target.checked)} /></td>
-                  <td>
-                    <div className="row" style={{ gap: ".5rem", flexWrap: "nowrap" }}>
-                      <div><strong>{s.student.external_id}</strong>{s.student.name && <div className="small muted">{s.student.name}</div>}</div>
-                      <button className="icon-btn" aria-label={`Edit ${s.student.external_id}`} title="Edit roll number / name"
-                        onClick={() => editStudent(s)}>✎</button>
+                  {canManage && <td><input type="checkbox" aria-label={`Select ${s.student.external_id}`} checked={picked.has(s.id)} onChange={(e) => toggle(s.id, e.target.checked)} /></td>}
+                  <td className="student-cell">
+                    <div className="row" style={{ gap: ".35rem", flexWrap: "nowrap" }}>
+                      <div className="student-info" title={s.student.name ? `${s.student.external_id} · ${s.student.name}` : s.student.external_id}>
+                        <strong>{s.student.external_id}</strong>
+                        {s.student.name && <span className="small muted student-name">{s.student.name}</span>}
+                      </div>
+                      {canManage && <button type="button" className="icon-btn" aria-label={`Edit ${s.student.external_id}`} title="Edit roll number / name"
+                        disabled={busy} onClick={() => editStudent(s)}><EditIcon /></button>}
                     </div>
                   </td>
                   <td><StatusBadge status={s.status} /></td>
-                  <td>{s.grades_total ? `${s.grades_reviewed} / ${s.grades_total}` : "–"}</td>
-                  <td><ConfidenceBadge value={s.min_confidence} label="min" /></td>
+                  <td>{s.max_score != null ? `${fmt(s.score_total)} / ${fmt(s.max_score)}` : "–"}</td>
+                  <td><ConfidenceBadge value={s.min_confidence} /></td>
+                  <td><ConfidenceBadge value={s.overall_confidence} /></td>
                   <td className="tas-cell">
-                    {editing?.id === s.id ? (
+                    {canManage && editing?.id === s.id && editing ? (
                       <div className="stack" style={{ minWidth: 220 }}>
                         <TaMultiSelect
                           tas={tas}
                           selected={[...editing.ids]}
                           onChange={(ids) => setEditing({ id: s.id, ids: new Set(ids) })}
                         />
-                        <div className="row"><button className="primary" onClick={saveAssignment}>Save</button><button onClick={() => setEditing(null)}>Cancel</button></div>
+                        <div className="row">
+                          <button type="button" className="primary" disabled={busy} onClick={saveAssignment}>Save</button>
+                          <button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+                        </div>
                       </div>
                     ) : (
                       <div className="tas-view">
@@ -280,22 +289,58 @@ export default function ExamSubmissions({ examId }: { examId: number }) {
                             ? s.ta_ids.map((id) => taOf(id) ? <Person key={id} user={taOf(id)} /> : <span key={id} className="muted">#{id}</span>)
                             : <span className="muted">unassigned</span>}
                         </div>
-                        <button className="btn-sm" onClick={() => setEditing({ id: s.id, ids: new Set(s.ta_ids) })}>Edit</button>
+                        {canManage && <button type="button" className="icon-btn" aria-label={`Edit TAs for ${s.student.external_id}`} title="Edit assigned TAs"
+                          disabled={busy} onClick={() => setEditing({ id: s.id, ids: new Set(s.ta_ids) })}><EditIcon /></button>}
                       </div>
                     )}
                   </td>
-                  <td>
-                    <div className="row">
-                      <a className="btn" href={`/api/submissions/${s.id}/export.pdf`}>Export PDF</a>
-                      {!["queued", "grading"].includes(s.status) && (
-                        <button className={["uploaded", "failed"].includes(s.status) ? "primary" : ""} onClick={() => regrade(s)}>
-                          {["uploaded", "failed"].includes(s.status) ? "Grade" : "Regrade"}
-                        </button>
+                  {canManage && <td>
+                    <div className="actions-row">
+                      {["ready_for_review", "reviewed"].includes(s.status) && (
+                        <a
+                          className="btn icon-action warn"
+                          href={`/review/${s.id}`}
+                          aria-label={s.status === "reviewed" ? `Open review for ${s.student.external_id}` : `Review ${s.student.external_id}`}
+                          title={s.status === "reviewed" ? "Open review" : "Review paper"}
+                        >
+                          <ReviewIcon />
+                        </a>
                       )}
-                      <button className="danger" onClick={() => removePaper(s)} disabled={s.status === "grading"}
-                        title={s.status === "grading" ? "Being graded right now; try again when it finishes" : "Permanently delete this paper"}>Delete</button>
+                      <a
+                        className="btn icon-action"
+                        href={`/api/submissions/${s.id}/export.pdf`}
+                        aria-label={`Export PDF for ${s.student.external_id}`}
+                        title="Export PDF"
+                      >
+                        <DownloadIcon />
+                      </a>
+                      {!["queued", "grading"].includes(s.status) && (() => {
+                        const initial = ["uploaded", "failed"].includes(s.status);
+                        return (
+                          <button
+                            type="button"
+                            className="icon-action"
+                            disabled={busy}
+                            aria-label={`${initial ? "Grade" : "Regrade"} ${s.student.external_id}`}
+                            title={initial ? "Grade paper" : "Regrade paper"}
+                            onClick={() => regrade(s)}
+                          >
+                            {initial ? <PlayIcon /> : <RegradeIcon />}
+                          </button>
+                        );
+                      })()}
+                      <button
+                        type="button"
+                        className="icon-action bad"
+                        disabled={busy || s.status === "grading"}
+                        aria-label={`Delete ${s.student.external_id}`}
+                        title={s.status === "grading" ? "Being graded right now; try again when it finishes" : "Permanently delete this paper"}
+                        onClick={() => removePaper(s)}
+                      >
+                        <TrashIcon />
+                      </button>
                     </div>
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tbody>

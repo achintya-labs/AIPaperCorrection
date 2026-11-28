@@ -5,4 +5,4 @@ import ExamAdmin from "../../../components/ExamAdmin";
 const id = Number(Astro.params.id);
 if (!Number.isInteger(id) || id < 1) return new Response("Not found", { status: 404 });
 ---
-<Layout title="Manage exam"><ExamAdmin id={id} client:load /></Layout>
+<Layout title="Manage exam"><ExamAdmin id={id} permissions={Astro.locals.user?.permissions ?? []} client:load /></Layout>

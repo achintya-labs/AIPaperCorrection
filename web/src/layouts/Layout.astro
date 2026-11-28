@@ -1,6 +1,7 @@
 ---
 import "../styles.css";
 import DialogHost from "../components/DialogHost";
+import { can } from "../lib/access";
 
 interface Props { title: string; wide?: boolean }
 const { title, wide = false } = Astro.props;
@@ -26,11 +27,11 @@ const logoutUrl = process.env.LOGOUT_URL ?? "";
         </a>
         <nav>
           <a href="/" aria-current={path === "/" ? "page" : undefined}>My queue</a>
+          {can(user.permissions, "exams.view") && (
+            <a href="/admin/exams" aria-current={path.startsWith("/admin/exams") ? "page" : undefined}>Exams</a>
+          )}
           {user.role === "admin" && (
-            <>
-              <a href="/admin/exams" aria-current={path.startsWith("/admin/exams") ? "page" : undefined}>Exams</a>
-              <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Admin</a>
-            </>
+            <a href="/admin/users" aria-current={path.startsWith("/admin/users") ? "page" : undefined}>Admin</a>
           )}
         </nav>
         <div class="topbar-end">

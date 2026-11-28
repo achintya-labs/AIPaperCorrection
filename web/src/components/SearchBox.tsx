@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { SearchIcon } from "./ui";
 
 /**
  * A search field for a table. Press "/" anywhere on the page to jump to it, Esc to clear.
@@ -38,10 +39,7 @@ export default function SearchBox({
   return (
     <div className="searchbox" role="search">
       <div className="searchfield">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-          <circle cx="8.5" cy="8.5" r="5.5" />
-          <path d="M13 13l4 4" />
-        </svg>
+        <SearchIcon />
         <input
           ref={ref}
           data-searchbox

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, errMsg } from "../lib/api";
 import type { Role, User, UserAdmin } from "../lib/types";
-import { Alert } from "./ui";
+import { Alert, EditIcon } from "./ui";
 import { confirmBox, formBox } from "../lib/dialog";
 import { matchesQuery } from "../lib/search";
 import SearchBox, { NoMatches } from "./SearchBox";
@@ -181,7 +181,7 @@ export default function Users({ sso = false, ldapAdminUrl = "" }: { sso?: boolea
                       <div className="row" style={{ gap: ".4rem", flexWrap: "nowrap" }}>
                         <span className="muted small">{u.name || "no name"}</span>
                         <button className="icon-btn" aria-label={`Edit name of ${u.email}`} title="Edit name (the email can't be changed)"
-                          disabled={busy === u.id} onClick={() => renameUser(u)}>✎</button>
+                          disabled={busy === u.id} onClick={() => renameUser(u)}><EditIcon /></button>
                       </div>
                     </td>
                     <td>

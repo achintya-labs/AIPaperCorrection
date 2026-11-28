@@ -10,7 +10,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app import pdf
-from app.auth import current_user, require_admin
+from app.auth import current_user, require_permission
+from app.permissions import Permission
 from app.db import get_db
 from app.grader.base import score_floor
 from app.models import Exam, Grade, GradeStatus, Page, Submission, SubmissionStatus, User
@@ -188,7 +189,7 @@ def _safe_cell(value) -> str:
     return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
 
 
-@router.get("/exams/{exam_id}/export.csv", dependencies=[Depends(require_admin)])
+@router.get("/exams/{exam_id}/export.csv", dependencies=[Depends(require_permission(Permission.papers_manage))])
 def export_grades(exam_id: int, db: Session = Depends(get_db)):
     exam = db.get(Exam, exam_id)
     if not exam:
@@ -357,7 +358,7 @@ def export_submission_pdf(
     return _pdf_response(annotated, sub)
 
 
-@router.get("/exams/{exam_id}/export.zip", dependencies=[Depends(require_admin)])
+@router.get("/exams/{exam_id}/export.zip", dependencies=[Depends(require_permission(Permission.papers_manage))])
 def export_exam_pdfs(
     exam_id: int,
     ids: str | None = None,

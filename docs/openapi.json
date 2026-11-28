@@ -151,6 +151,34 @@
         "title": "AutoSplitResult",
         "type": "object"
       },
+      "Bin": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "graded": {
+            "title": "Graded",
+            "type": "integer"
+          },
+          "reviewed": {
+            "title": "Reviewed",
+            "type": "integer"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "graded",
+          "reviewed"
+        ],
+        "title": "Bin",
+        "type": "object"
+      },
       "Body_auto_split_import_exams__exam_id__imports_auto_split_post": {
         "properties": {
           "file": {
@@ -697,6 +725,67 @@
         "title": "LoginIn",
         "type": "object"
       },
+      "Overview": {
+        "properties": {
+          "auto_bin_width": {
+            "title": "Auto Bin Width",
+            "type": "number"
+          },
+          "bin_width": {
+            "title": "Bin Width",
+            "type": "number"
+          },
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/Bin"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "exam_id": {
+            "title": "Exam Id",
+            "type": "integer"
+          },
+          "exam_name": {
+            "title": "Exam Name",
+            "type": "string"
+          },
+          "graded": {
+            "$ref": "#/components/schemas/Series"
+          },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Score"
+          },
+          "reviewed": {
+            "$ref": "#/components/schemas/Series"
+          },
+          "total_papers": {
+            "title": "Total Papers",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exam_id",
+          "exam_name",
+          "total_papers",
+          "max_score",
+          "graded",
+          "reviewed",
+          "bin_width",
+          "auto_bin_width",
+          "bins"
+        ],
+        "title": "Overview",
+        "type": "object"
+      },
       "PageOut": {
         "properties": {
           "confidence": {
@@ -1021,6 +1110,43 @@
         "title": "RubricPdfIn",
         "type": "object"
       },
+      "Series": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "std_dev": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std Dev"
+          }
+        },
+        "required": [
+          "count",
+          "mean",
+          "std_dev"
+        ],
+        "title": "Series",
+        "type": "object"
+      },
       "SplitJobStatus": {
         "enum": [
           "queued",
@@ -1138,6 +1264,17 @@
             "title": "Id",
             "type": "integer"
           },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Score"
+          },
           "min_confidence": {
             "anyOf": [
               {
@@ -1166,6 +1303,17 @@
             },
             "title": "Pages",
             "type": "array"
+          },
+          "score_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Total"
           },
           "status": {
             "$ref": "#/components/schemas/SubmissionStatus"
@@ -1215,6 +1363,17 @@
             "title": "Id",
             "type": "integer"
           },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Score"
+          },
           "min_confidence": {
             "anyOf": [
               {
@@ -1236,6 +1395,17 @@
               }
             ],
             "title": "Overall Confidence"
+          },
+          "score_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Total"
           },
           "status": {
             "$ref": "#/components/schemas/SubmissionStatus"
@@ -1397,6 +1567,14 @@
             "title": "Name",
             "type": "string"
           },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Permissions",
+            "type": "array"
+          },
           "reviewed_grades": {
             "title": "Reviewed Grades",
             "type": "integer"
@@ -1413,7 +1591,8 @@
           "active",
           "has_password",
           "assigned_papers",
-          "reviewed_grades"
+          "reviewed_grades",
+          "permissions"
         ],
         "title": "UserAdminOut",
         "type": "object"
@@ -1459,6 +1638,14 @@
             "title": "Name",
             "type": "string"
           },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Permissions",
+            "type": "array"
+          },
           "role": {
             "$ref": "#/components/schemas/Role"
           }
@@ -1467,7 +1654,8 @@
           "id",
           "email",
           "name",
-          "role"
+          "role",
+          "permissions"
         ],
         "title": "UserOut",
         "type": "object"
@@ -1819,6 +2007,60 @@
           }
         },
         "summary": "Change Own Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/people": {
+      "get": {
+        "description": "Active people by name and email only (no activity or account state), so the Papers tab can name the TAs assigned\nto each paper for roles that may see that tab but not manage users.",
+        "operationId": "list_people_auth_people_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserOut"
+                  },
+                  "title": "Response List People Auth People Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List People",
         "tags": [
           "auth"
         ]
@@ -3140,6 +3382,158 @@
         ]
       }
     },
+    "/exams/{exam_id}/overview": {
+      "get": {
+        "description": "Statistics and histogram data for one exam. `graded` uses Claude's scores for every graded paper;\n`reviewed` uses the final (TA-approved) scores of papers whose review is complete.",
+        "operationId": "exam_overview_exams__exam_id__overview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Marks per histogram bar; default is chosen from the data",
+            "in": "query",
+            "name": "bin_width",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Marks per histogram bar; default is chosen from the data",
+              "title": "Bin Width"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Exam Overview",
+        "tags": [
+          "overview"
+        ]
+      }
+    },
+    "/exams/{exam_id}/overview.csv": {
+      "get": {
+        "description": "The same numbers as the overview, as a CSV: a statistics block, then a blank line, then one row per histogram bin.",
+        "operationId": "export_overview_exams__exam_id__overview_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exam_id",
+            "required": true,
+            "schema": {
+              "title": "Exam Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bin_width",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bin Width"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Overview",
+        "tags": [
+          "overview"
+        ]
+      }
+    },
     "/exams/{exam_id}/queue": {
       "post": {
         "description": "Grade everything that hasn't been graded: queue every submission that is uploaded or failed.",
@@ -3764,6 +4158,7 @@
     },
     "/submissions": {
       "get": {
+        "description": "`scope=mine` (default): admins all papers, TAs the ones assigned to them (the review queue).\n`scope=exam` (needs `exam_id` and `tab.papers`): every paper of that exam, for the read-only Papers tab; a TA still\ngets 404 for an exam they are not assigned to. Reviewing stays limited to one's own papers either way.",
         "operationId": "list_submissions_submissions_get",
         "parameters": [
           {
@@ -3796,6 +4191,20 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "mine",
+              "enum": [
+                "mine",
+                "exam"
+              ],
+              "title": "Scope",
+              "type": "string"
             }
           },
           {

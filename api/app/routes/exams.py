@@ -3,10 +3,11 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import current_user, require_admin
+from app.auth import current_user, require_permission
 from app import deletion, pdf
 from app.db import get_db
 from app.models import Exam, Question, Role, Rubric, SplitJob, Submission, User, submission_tas
+from app.permissions import Permission
 from app.storage import Storage, get_storage
 
 router = APIRouter(prefix="/exams", tags=["exams"])
@@ -95,7 +96,7 @@ def latest_rubric(db: Session, exam_id: int) -> Rubric | None:
     )
 
 
-@router.post("", response_model=ExamOut, status_code=201, dependencies=[Depends(require_admin)])
+@router.post("", response_model=ExamOut, status_code=201, dependencies=[Depends(require_permission(Permission.exams_create))])
 def create_exam(body: ExamIn, db: Session = Depends(get_db)):
     exam = Exam(**body.model_dump())
     db.add(exam)
@@ -108,7 +109,7 @@ def list_exams(user: User = Depends(current_user), db: Session = Depends(get_db)
     return db.scalars(visible_exams(user)).all()
 
 
-@router.patch("/{exam_id}", response_model=ExamOut, dependencies=[Depends(require_admin)])
+@router.patch("/{exam_id}", response_model=ExamOut, dependencies=[Depends(require_permission(Permission.tab_advanced))])
 def update_exam(exam_id: int, body: ExamIn, db: Session = Depends(get_db)):
     exam = db.get(Exam, exam_id)
     if not exam:
@@ -123,7 +124,7 @@ def update_exam(exam_id: int, body: ExamIn, db: Session = Depends(get_db)):
     "/{exam_id}/rubrics",
     response_model=RubricOut,
     status_code=201,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_permission(Permission.rubric_edit))],
 )
 def create_rubric_version(exam_id: int, body: RubricIn, db: Session = Depends(get_db)):
     """Rubrics are immutable; editing creates a new version so past grading runs stay traceable."""
@@ -145,7 +146,7 @@ class RubricPdfIn(RubricIn):
     version: int | None = None  # shown in the PDF header; omit for an unsaved draft
 
 
-@router.post("/{exam_id}/rubric.pdf", dependencies=[Depends(require_admin)])
+@router.post("/{exam_id}/rubric.pdf", dependencies=[Depends(require_permission(Permission.rubric_edit))])
 def rubric_pdf(exam_id: int, body: RubricPdfIn, db: Session = Depends(get_db)):
     """A PDF of the rubric JSON you send (so unsaved edits can be printed too), generated on the fly. Nothing is stored."""
     exam = db.get(Exam, exam_id)
@@ -157,7 +158,7 @@ def rubric_pdf(exam_id: int, body: RubricPdfIn, db: Session = Depends(get_db)):
     return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'})
 
 
-@router.get("/{exam_id}/rubric", response_model=RubricOut)
+@router.get("/{exam_id}/rubric", response_model=RubricOut, dependencies=[Depends(require_permission(Permission.tab_rubric))])
 def get_latest_rubric(exam_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     # The rubric holds model answers, so a TA only gets it for exams they grade (404 otherwise, as elsewhere).
     if not db.scalar(visible_exams(user).where(Exam.id == exam_id)):
@@ -168,7 +169,7 @@ def get_latest_rubric(exam_id: int, user: User = Depends(current_user), db: Sess
     return rubric
 
 
-@router.delete("/{exam_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/{exam_id}", status_code=204, dependencies=[Depends(require_permission(Permission.exams_delete))])
 def delete_exam(
     exam_id: int,
     force: bool = False,

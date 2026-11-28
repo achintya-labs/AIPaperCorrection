@@ -2,4 +2,4 @@
 import Layout from "../../../layouts/Layout.astro";
 import Exams from "../../../components/Exams";
 ---
-<Layout title="Exams"><Exams client:load /></Layout>
+<Layout title="Exams"><Exams permissions={Astro.locals.user?.permissions ?? []} client:load /></Layout>

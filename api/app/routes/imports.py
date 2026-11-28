@@ -15,15 +15,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import pdf
-from app.auth import require_admin
+from app.auth import require_permission
 from app.config import get_settings
 from app.db import get_db
 from app.auth import sso
 from app.auth.directory import Directory, get_directory
+from app.permissions import Permission
 from app.models import Exam, Role, SplitJob, SplitJobStatus, Student, Submission, SubmissionStatus, User
 from app.storage import Storage, get_storage
 
-router = APIRouter(tags=["import"], dependencies=[Depends(require_admin)])
+router = APIRouter(tags=["import"], dependencies=[Depends(require_permission(Permission.tab_upload))])
 
 
 class AssignMode(str, Enum):

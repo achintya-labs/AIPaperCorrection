@@ -84,11 +84,18 @@ def test_every_route_has_expected_auth_dependency(client):
         ("GET", "/auth/google/callback"),
     }
     admin_only = {
-        ("POST", "/auth/users"),
         ("GET", "/auth/users"),
+        ("POST", "/auth/users"),
         ("PUT", "/auth/users/{user_id}/password"),
         ("PATCH", "/auth/users/{user_id}"),
         ("DELETE", "/auth/users/{user_id}"),
+        ("GET", "/grader/status"),
+        ("POST", "/grader/usage"),
+    }
+    # Gated by a permission in app/permissions.py (admins have them all; a TA has only some)
+    permission_gated = {
+        ("GET", "/auth/people"),
+        ("GET", "/exams/{exam_id}/rubric"),
         ("POST", "/exams"),
         ("PATCH", "/exams/{exam_id}"),
         ("POST", "/exams/{exam_id}/rubrics"),
@@ -113,10 +120,10 @@ def test_every_route_has_expected_auth_dependency(client):
         ("PUT", "/submissions/bulk/assignment"),
         ("POST", "/submissions/bulk/delete"),
         ("PATCH", "/students/{student_id}"),
-        ("GET", "/grader/status"),
-        ("POST", "/grader/usage"),
         ("GET", "/exams/{exam_id}/export.csv"),
         ("GET", "/exams/{exam_id}/export.zip"),
+        ("GET", "/exams/{exam_id}/overview"),
+        ("GET", "/exams/{exam_id}/overview.csv"),
     }
 
     seen = set()
@@ -131,10 +138,13 @@ def test_every_route_has_expected_auth_dependency(client):
             deps = _dep_calls(route.dependant)
             if key in public:
                 continue
-            assert current_user in deps or require_admin in deps, f"{key} is missing authentication"
+            gated = any(getattr(d, "__qualname__", "") == "require_permission.<locals>.check" for d in deps)
+            assert current_user in deps or require_admin in deps or gated, f"{key} is missing authentication"
             if key in admin_only:
                 assert require_admin in deps, f"{key} must require_admin"
+            elif key in permission_gated:
+                assert gated, f"{key} must require a permission"
             else:
-                assert require_admin not in deps, f"{key} unexpectedly requires admin"
+                assert require_admin not in deps and not gated, f"{key} unexpectedly restricted"
 
-    assert admin_only <= seen
+    assert admin_only | permission_gated <= seen

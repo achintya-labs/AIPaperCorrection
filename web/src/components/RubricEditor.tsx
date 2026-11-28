@@ -37,7 +37,49 @@ function problems(qs: Question[]): string[] {
   return out;
 }
 
-export default function RubricEditor({ examId }: { examId: number }) {
+export default function RubricEditor({ examId, canEdit = false }: { examId: number; canEdit?: boolean }) {
+  if (!canEdit) return <RubricView examId={examId} />;
+  return <RubricForm examId={examId} />;
+}
+
+/** Read-only: the rubric as saved, with no editing, import/export or downloads. */
+function RubricView({ examId }: { examId: number }) {
+  const [rubric, setRubric] = useState<Rubric | null | "none">(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    api<Rubric>(`/exams/${examId}/rubric`)
+      .then((r) => { if (alive) setRubric(r); })
+      .catch((e) => { if (!alive) return; if (e instanceof ApiError && e.status === 404) setRubric("none"); else setError(errMsg(e)); });
+    return () => { alive = false; };
+  }, [examId]);
+  if (error) return <Alert tone="bad">{error}</Alert>;
+  if (!rubric) return <p className="muted">Loading…</p>;
+  if (rubric === "none") return <p className="muted">No rubric yet.</p>;
+  const total = rubric.questions.reduce((s, q) => s + q.max_points, 0);
+  return (
+    <div className="stack">
+      <h2 style={{ margin: 0 }}>Rubric <span className="muted">· version {rubric.version}</span> <span className="muted small">· {rubric.questions.length} questions · {fmt(total)} pts</span></h2>
+      {rubric.questions.map((q) => (
+        <div className="card stack" key={q.id ?? q.number}>
+          <div className="row between"><strong>Question {q.number}</strong><span className="badge neutral">{fmt(q.max_points)} pts</span></div>
+          {q.text && <div><span className="field-label">Question text</span><div style={{ whiteSpace: "pre-wrap" }}>{q.text}</div></div>}
+          {q.expected_answer && <div><span className="field-label">Model answer</span><div style={{ whiteSpace: "pre-wrap" }}>{q.expected_answer}</div></div>}
+          {q.criteria.length > 0 && (
+            <div>
+              <span className="field-label">Grading criteria</span>
+              <ul style={{ margin: ".25rem 0 0", paddingLeft: "1.1rem" }}>
+                {q.criteria.map((c, i) => <li key={i}>{c.description} <span className="muted">({c.points > 0 ? "+" : ""}{fmt(c.points)})</span></li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RubricForm({ examId }: { examId: number }) {
   const [version, setVersion] = useState<number | null>(null);
   const [qs, setQs] = useState<KeyedQuestion[]>([]);
   const [saved, setSaved] = useState<string>("[]");

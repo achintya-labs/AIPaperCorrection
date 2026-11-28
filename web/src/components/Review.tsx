@@ -5,7 +5,7 @@ import { pageScrollFor } from "../lib/dockedScroll";
 import { Alert, ConfidenceBadge, StatusBadge, fmt } from "./ui";
 
 interface Draft { score: string; feedback: string }
-const LOW = 0.6;
+const LOW = 0.35;
 
 const baseline = (g: Grade): Draft => ({
   score: String(g.final_score ?? g.ai_score ?? 0),

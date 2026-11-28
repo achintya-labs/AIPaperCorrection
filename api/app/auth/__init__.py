@@ -10,6 +10,7 @@ from app.auth.directory import Directory, DirectoryError, get_directory
 from app.config import get_settings
 from app.db import get_db
 from app.models import Role, User
+from app.permissions import Permission, permissions_for
 
 ALGORITHM = "HS256"
 COOKIE_NAME = "session"
@@ -98,3 +99,15 @@ def require_admin(user: User = Depends(current_user)) -> User:
     if user.role != Role.admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin only")
     return user
+
+
+def require_permission(*needed: Permission):
+    """Dependency factory: the signed-in user's role must grant every listed permission (see app/permissions.py).
+    Returns the user, like current_user."""
+
+    def check(user: User = Depends(current_user)) -> User:
+        if not set(needed) <= permissions_for(user.role):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't have permission to do that")
+        return user
+
+    return check

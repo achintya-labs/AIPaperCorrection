@@ -1,0 +1,15 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+Astro.response.status = 404;
+---
+<Layout title="Page not found">
+  <div class="card stack" style="max-width: 30rem; margin: 3rem auto; text-align: center; padding: 2rem 1.5rem;">
+    <div class="mono muted" style="font-size: 2.25rem; font-weight: 700; line-height: 1;">404</div>
+    <h1 style="margin: 0;">Page not found</h1>
+    <p class="muted" style="margin: 0;">The page you requested doesn't exist or may have been moved.</p>
+    <div class="row" style="justify-content: center; margin-top: .5rem;">
+      <a class="btn primary" href="/">Back to My queue</a>
+    </div>
+  </div>
+</Layout>

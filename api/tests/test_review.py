@@ -137,9 +137,12 @@ def test_list_progress_fields(env):
     ta = env.as_user("ta@x.io")
     (s,) = ta.get("/submissions").json()
     assert (s["grades_total"], s["grades_reviewed"], s["min_confidence"]) == (2, 0, 0.5)
+    assert (s["score_total"], s["max_score"]) == (5.0, 10.0)
     g = detail(ta, env.sid)["grades"][0]
     ta.patch(f"/grades/{g['id']}", json={"version": 1, "final_score": 1, "final_feedback": "x"})
-    assert ta.get("/submissions").json()[0]["grades_reviewed"] == 1
+    after = ta.get("/submissions").json()[0]
+    assert after["grades_reviewed"] == 1
+    assert (after["score_total"], after["max_score"]) == (4.0, 10.0)
 
 
 def test_export_csv(env):

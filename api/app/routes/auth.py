@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import AfterValidator, BaseModel
+from pydantic import AfterValidator, BaseModel, computed_field
 from pydantic_core import PydanticCustomError
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from app.auth import (
     current_user,
     hash_password,
     require_admin,
+    require_permission,
     set_session_cookie,
     verify_password,
 )
@@ -22,6 +23,7 @@ from app.auth.directory import Directory, get_directory
 from app.config import get_settings
 from app.db import get_db
 from app.models import Grade, Role, User, submission_tas
+from app.permissions import Permission, permissions_for
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -71,6 +73,11 @@ class UserOut(BaseModel):
     role: Role
 
     model_config = {"from_attributes": True}
+
+    @computed_field  # what the role may do (app/permissions.py); the web app shows or hides pages and tabs from this
+    @property
+    def permissions(self) -> list[str]:
+        return sorted(p.value for p in permissions_for(self.role))
 
 
 class UserAdminOut(UserOut):
@@ -268,6 +275,13 @@ def list_users(db: Session = Depends(get_db), directory: Directory = Depends(get
     if get_settings().sso:
         sso.sync_directory(db, directory)
     return _admin_out(db, list(db.scalars(select(User).order_by(User.id)).all()))
+
+
+@router.get("/people", response_model=list[UserOut], dependencies=[Depends(require_permission(Permission.tab_papers))])
+def list_people(db: Session = Depends(get_db)):
+    """Active people by name and email only (no activity or account state), so the Papers tab can name the TAs assigned
+    to each paper for roles that may see that tab but not manage users."""
+    return db.scalars(select(User).where(User.active).order_by(User.id)).all()
 
 
 @router.put("/users/{user_id}/password", status_code=204, dependencies=[Depends(local_only)])

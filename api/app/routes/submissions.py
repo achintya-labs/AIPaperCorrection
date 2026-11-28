@@ -5,10 +5,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import current_user, require_admin
+from app.auth import current_user, require_permission
 from app.db import get_db
 from app import deletion
-from app.models import Grade, GradeStatus, Role, Student, Submission, SubmissionStatus, User
+from app.permissions import Permission, permissions_for
+from app.routes.exams import visible_exams
+from app.models import Exam, Grade, GradeStatus, Question, Role, Student, Submission, SubmissionStatus, User
 from app.storage import Storage, get_storage
 
 router = APIRouter(tags=["submissions"])
@@ -41,6 +43,8 @@ class SubmissionOut(BaseModel):
     grades_total: int = 0
     grades_reviewed: int = 0
     min_confidence: float | None = None
+    score_total: float | None = None
+    max_score: float | None = None
 
     model_config = {"from_attributes": True}
 
@@ -88,7 +92,7 @@ def get_visible_submission(
     return sub
 
 
-@router.post("/students", response_model=list[StudentOut], status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/students", response_model=list[StudentOut], status_code=201, dependencies=[Depends(require_permission(Permission.papers_manage))])
 def upsert_students(body: list[StudentIn], db: Session = Depends(get_db)):
     existing = {
         s.external_id: s
@@ -107,7 +111,7 @@ def upsert_students(body: list[StudentIn], db: Session = Depends(get_db)):
     return out
 
 
-@router.patch("/students/{student_id}", response_model=StudentOut, dependencies=[Depends(require_admin)])
+@router.patch("/students/{student_id}", response_model=StudentOut, dependencies=[Depends(require_permission(Permission.papers_manage))])
 def update_student(student_id: int, body: StudentPatch, db: Session = Depends(get_db)):
     """Correct a student's roll number (external_id) and/or name."""
     student = db.get(Student, student_id)
@@ -129,7 +133,7 @@ def update_student(student_id: int, body: StudentPatch, db: Session = Depends(ge
     return student
 
 
-@router.get("/students", response_model=list[StudentOut], dependencies=[Depends(require_admin)])
+@router.get("/students", response_model=list[StudentOut], dependencies=[Depends(require_permission(Permission.papers_manage))])
 def list_students(db: Session = Depends(get_db)):
     return db.scalars(select(Student).order_by(Student.external_id)).all()
 
@@ -138,10 +142,23 @@ def list_students(db: Session = Depends(get_db)):
 def list_submissions(
     exam_id: int | None = None,
     status: SubmissionStatus | None = None,
+    scope: Literal["mine", "exam"] = "mine",
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    q = visible_submissions(user).order_by(Submission.id)
+    """`scope=mine` (default): admins all papers, TAs the ones assigned to them (the review queue).
+    `scope=exam` (needs `exam_id` and `tab.papers`): every paper of that exam, for the read-only Papers tab; a TA still
+    gets 404 for an exam they are not assigned to. Reviewing stays limited to one's own papers either way."""
+    if scope == "exam":
+        if exam_id is None:
+            raise HTTPException(422, "scope=exam needs exam_id")
+        if Permission.tab_papers not in permissions_for(user.role):
+            raise HTTPException(403, "You don't have permission to do that")
+        if not db.scalar(visible_exams(user).where(Exam.id == exam_id)):
+            raise HTTPException(404, "Exam not found")
+        q = select(Submission).options(selectinload(Submission.student), selectinload(Submission.tas)).order_by(Submission.id)
+    else:
+        q = visible_submissions(user).order_by(Submission.id)
     if exam_id is not None:
         q = q.where(Submission.exam_id == exam_id)
     if status is not None:
@@ -155,7 +172,10 @@ def list_submissions(
                 func.count().label("total"),
                 func.sum(case((Grade.status != GradeStatus.pending, 1), else_=0)).label("reviewed"),
                 func.min(Grade.ai_confidence).label("min_conf"),
+                func.sum(func.coalesce(Grade.final_score, Grade.ai_score, 0.0)).label("score_total"),
+                func.sum(Question.max_points).label("max_score"),
             )
+            .join(Question, Grade.question_id == Question.id)
             .where(Grade.submission_id.in_([s.id for s in subs]))
             .group_by(Grade.submission_id)
         )
@@ -166,6 +186,9 @@ def list_submissions(
         if p := progress.get(s.id):
             item.grades_total, item.grades_reviewed = p.total, int(p.reviewed or 0)
             item.min_confidence = p.min_conf
+            if p.total:
+                item.score_total = float(p.score_total or 0.0)
+                item.max_score = float(p.max_score or 0.0)
         out.append(item)
     return out
 
@@ -178,7 +201,7 @@ def get_submission(sub: Submission = Depends(get_visible_submission)):
 @router.put(
     "/submissions/bulk/assignment",
     response_model=BulkAssignResult,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_permission(Permission.papers_manage))],
 )
 def assign_selected(body: BulkAssignIn, db: Session = Depends(get_db)):
     """Assign TAs to several papers at once: replace each paper's TAs, add to them, or remove from them."""
@@ -215,7 +238,7 @@ def assign_selected(body: BulkAssignIn, db: Session = Depends(get_db)):
 @router.put(
     "/submissions/{submission_id}/assignment",
     response_model=SubmissionOut,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_permission(Permission.papers_manage))],
 )
 def assign_submission(
     submission_id: int, body: AssignIn, db: Session = Depends(get_db)
@@ -232,7 +255,7 @@ def assign_submission(
     return sub
 
 
-@router.post("/submissions/bulk/delete", response_model=BulkDeleteResult, dependencies=[Depends(require_admin)])
+@router.post("/submissions/bulk/delete", response_model=BulkDeleteResult, dependencies=[Depends(require_permission(Permission.papers_manage))])
 def delete_selected(
     body: BulkDeleteIn,
     db: Session = Depends(get_db),
@@ -258,7 +281,7 @@ def delete_selected(
     return BulkDeleteResult(deleted=len(ids))
 
 
-@router.delete("/submissions/{submission_id}", status_code=204, dependencies=[Depends(require_admin)])
+@router.delete("/submissions/{submission_id}", status_code=204, dependencies=[Depends(require_permission(Permission.papers_manage))])
 def delete_submission(
     submission_id: int,
     force: bool = False,

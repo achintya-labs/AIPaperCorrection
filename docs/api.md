@@ -1,6 +1,6 @@
 # API reference
 
-40 endpoints on the FastAPI service, plus 3 internal endpoints on the Claude runner
+43 endpoints on the FastAPI service, plus 3 internal endpoints on the Claude runner
 ([appendix](#appendix-claude-runner-internal)). The machine-readable spec is [`openapi.json`](openapi.json),
 regenerated with `python scripts/export-openapi.py`. The running API also serves Swagger UI at `/docs`
 (development port only).
@@ -32,7 +32,14 @@ curl -s -b jar $API/auth/me
 | Role | Can |
 |---|---|
 | `admin` | everything |
-| `ta` | see exams, rubrics and papers **only for exams where a paper is assigned to them**, and review only those papers |
+| `ta` | **read-only** view of each assigned exam: the Papers tab (marks, status, assigned TAs), the Rubric and the **Overview** (statistics, plots, export); and review the papers assigned to them. No grading, assignment, edits, deletion, imports, or downloads of papers. Sees exams, papers and the rubric **only for exams where a paper is assigned to them** |
+
+Roles are mapped to **permissions** in `api/app/permissions.py` (one table; a new role is one entry there). `GET /auth/me`
+returns the caller's `permissions`, which the web app uses to show pages and tabs, and each endpoint below that says
+"Needs `x`" refuses roles without that permission (403). Per-exam tabs are *view* permissions: `tab.papers`, `tab.rubric`,
+`tab.upload`, `tab.overview`, `tab.advanced`. Changing things is separate: `papers.manage` (grade, assign, delete, edit students,
+export papers) and `rubric.edit`. The rest are `exams.view`, `exams.create`, `exams.delete` and `overview.export`.
+User management, `GET /grader/status` and `POST /grader/usage` stay admin-only whatever the table says.
 
 "any" in the tables below means any signed-in user. A TA asking for a submission or grade that is not theirs gets
 **404** (not 403), the same as for one that does not exist.
@@ -42,7 +49,7 @@ curl -s -b jar $API/auth/me
 | Status | Meaning | Body |
 |---|---|---|
 | 401 | Missing, invalid or expired session, or user deactivated | `{"detail": "Not authenticated"}` |
-| 403 | Signed in but not allowed (admin-only endpoint) | `{"detail": "Admin only"}` |
+| 403 | Signed in but not allowed | `{"detail": "Admin only"}` (user management, grader status), or `{"detail": "You don't have permission to do that"}` (permission-gated endpoints) |
 | 404 | Not found, or not visible to you | `{"detail": "…"}` |
 | 409 | State conflict (details per endpoint) | `{"detail": "…"}`, or for stale grade edits `{"detail": {"message": "…", "current": {…grade…}}}` |
 | 413 | Upload too large | `{"detail": "name.pdf exceeds 100 MB"}` |
@@ -80,7 +87,7 @@ Public. Body `{"email": str, "password": str}`. A blank `password` is always **4
 `JWT_EXPIRE_MINUTES`). **401** wrong credentials or inactive user.
 
 ```json
-{"id": 1, "email": "admin@example.com", "name": "Admin", "role": "admin"}
+{"id": 1, "email": "admin@example.com", "name": "Admin", "role": "admin", "permissions": ["exams.create", "…"]}
 ```
 
 ### `GET /auth/providers`
@@ -126,6 +133,10 @@ other session of yours is signed out**.
 curl -s -b jar -c jar -X PUT -H 'content-type: application/json' \
      -d '{"current_password":"old-password-123","new_password":"new-password-456"}' $API/auth/me/password
 ```
+
+### `GET /auth/people`
+Needs `tab.papers` (admin and TA). **200** → `UserOut[]` of the **active** people (id, email, name, role, permissions; nothing about
+their activity or account state), so the Papers tab can name the TAs assigned to each paper for roles that can't call `GET /auth/users`.
 
 ### `GET /auth/users`
 Admin. **200** → `UserAdminOut[]` ordered by id: a `UserOut` plus the account's state and activity, so you can make
@@ -211,15 +222,15 @@ exam selector never lists exams they don't grade). The list follows assignment c
 **200** → `ExamOut[]`: `{"id": 1, "name": "Midterm", "model_override": null}`.
 
 ### `POST /exams`
-Admin. Body `{"name": str, "model_override": str | null}`. **201** → `ExamOut`. `model_override` is a model id used
+Needs `exams.create` (admin). Body `{"name": str, "model_override": str | null}`. **201** → `ExamOut`. `model_override` is a model id used
 instead of `CLAUDE_MODEL` for this exam's papers (applies to papers graded from then on).
 
 ### `PATCH /exams/{exam_id}`
-Admin. Body is the same as create and **replaces both fields** (send `name` every time; omitting `model_override`
+Needs `tab.advanced` (admin). Body is the same as create and **replaces both fields** (send `name` every time; omitting `model_override`
 sets it to `null`). **200** → `ExamOut`. **404**.
 
 ### `POST /exams/{exam_id}/rubrics`
-Admin. Creates a **new rubric version** (rubrics are never edited in place; version = previous + 1).
+Needs `rubric.edit` (admin). Creates a **new rubric version** (rubrics are never edited in place; version = previous + 1).
 Body:
 
 ```json
@@ -236,19 +247,19 @@ Body:
 **404** exam. **422** duplicate numbers, criteria over max, or schema errors.
 
 ### `POST /exams/{exam_id}/rubric.pdf`
-Admin. Generates a **PDF of the rubric on the fly** from the JSON you send, so unsaved editor changes can be printed too.
+Needs `rubric.edit` (admin). Generates a **PDF of the rubric on the fly** from the JSON you send, so unsaved editor changes can be printed too.
 Nothing is stored. Body: the same as `POST /exams/{id}/rubrics`, plus an optional `"version"` shown in the header
 (omit it for a draft): `{"version": 3, "questions": [...]}`. **200** → `application/pdf` (`rubric-exam-{id}-v3.pdf`, or
 `…-draft.pdf`): exam name, question count and total marks, then per question its number, marks, text, expected answer and
 criteria (with `+`/`-` points). **404** exam. **422** same rules as saving a rubric (no questions, duplicate numbers, criteria above max).
 
 ### `GET /exams/{exam_id}/rubric`
-Any, scoped like `GET /exams`. **200** → the **latest** `RubricOut`. **404** if the exam has no rubric, and also, for a
+Needs `tab.rubric` (admin and TA), scoped like `GET /exams`. **200** → the **latest** `RubricOut`. **404** if the exam has no rubric, and also, for a
 TA, if none of its papers are assigned to them (the rubric contains the model answers, and an unassigned exam looks
 exactly like a missing one).
 
 ### `DELETE /exams/{exam_id}`
-Admin. **Permanently deletes an exam**: every rubric version and every paper in it, with their grades, page images,
+Needs `exams.delete` (admin). **Permanently deletes an exam**: every rubric version and every paper in it, with their grades, page images,
 grading history, assignments and stored PDFs. **204**. Students are kept (they may have papers in other exams).
 Query: `force` (bool, default `false`).
 
@@ -266,6 +277,38 @@ curl -s -b jar -X DELETE $API/exams/3                  # refused if it has paper
 curl -s -b jar -X DELETE "$API/exams/3?force=true"     # deletes the exam and all its papers
 ```
 
+### `GET /exams/{exam_id}/overview`
+Needs `tab.overview` (admin and TA). **Scoped** like `GET /exams`: a TA gets **404** for an exam none of whose papers are
+assigned to them. The statistics cover **every paper of the exam**, not only the caller's. Query: `bin_width` (number > 0,
+marks per histogram bar; default is chosen from the data). **200** → `Overview`:
+
+```json
+{"exam_id": 1, "exam_name": "Midterm", "total_papers": 4, "max_score": 10.0,
+ "graded":   {"count": 3, "mean": 6.0, "std_dev": 1.63},
+ "reviewed": {"count": 2, "mean": 5.5, "std_dev": 1.5},
+ "bin_width": 5.0, "auto_bin_width": 2.0,
+ "bins": [{"start": 0, "end": 5, "graded": 1, "reviewed": 1}, {"start": 5, "end": 10, "graded": 2, "reviewed": 1}]}
+```
+
+- `graded`: papers that are `ready_for_review` or `reviewed`, scored with **Claude's** marks (`ai_score`, summed per paper).
+- `reviewed`: papers that are `reviewed` (review completed), scored with the **final** marks (`final_score`, else `ai_score`).
+  So "Papers graded x/y" is `graded.count / total_papers` and "Papers reviewed z/y" is `reviewed.count / total_papers`.
+- `std_dev` is the population standard deviation; `mean` and `std_dev` are `null` for an empty series.
+- Bins start at 0 (lower if negative marking produced a negative total) and run to the larger of `max_score` and the top
+  score; both series share the same bins. The default width is the Freedman–Diaconis rule (Sturges' when the spread is zero),
+  kept between `max_score/30` and `max_score/5` and rounded to 1, 2, 2.5 or 5 × a power of ten.
+
+**404** exam. **422** `bin_width` ≤ 0 or one that would make more than 200 bars.
+
+### `GET /exams/{exam_id}/overview.csv`
+Needs `tab.overview` and `overview.export` (admin and TA). The same numbers as a CSV download
+(`exam-{id}-overview.csv`): the exam, total papers and max marks; a `statistic,graded,reviewed` block (papers, mean,
+std_dev); a blank line; then `bin_start,bin_end,graded,reviewed` rows. Same `bin_width` query and errors as above.
+
+```sh
+curl -s -b jar -o overview.csv "$API/exams/1/overview.csv?bin_width=5"
+```
+
 ---
 
 ## Students
@@ -273,14 +316,14 @@ curl -s -b jar -X DELETE "$API/exams/3?force=true"     # deletes the exam and al
 Students are created automatically by import; these endpoints are for managing them directly.
 
 ### `POST /students`
-Admin. Body is an **array**: `[{"external_id": "1001", "name": "Ann Lee"}]`. Upserts by `external_id` (an existing
+Needs `papers.manage` (admin). Body is an **array**: `[{"external_id": "1001", "name": "Ann Lee"}]`. Upserts by `external_id` (an existing
 student's name is only updated if you send one). **201** → `StudentOut[]` `{id, external_id, name}`.
 
 ### `GET /students`
-Admin. **200** → `StudentOut[]` ordered by `external_id`.
+Needs `papers.manage` (admin). **200** → `StudentOut[]` ordered by `external_id`.
 
 ### `PATCH /students/{student_id}`
-Admin. Corrects a student's roll number and/or name. Body `{"external_id": "EE24B001", "name": "Ann Lee"}`; send at
+Needs `papers.manage` (admin). Corrects a student's roll number and/or name. Body `{"external_id": "EE24B001", "name": "Ann Lee"}`; send at
 least one. **200** → `StudentOut`. **404** no such student. **409** another student already has that roll number.
 **422** nothing to change, or an empty roll number.
 
@@ -291,41 +334,46 @@ least one. **200** → `StudentOut`. **404** no such student. **409** another st
 A submission is one student's paper for one exam.
 
 ### `GET /submissions`
-Any, **scoped**: admins see all, TAs only submissions they are assigned to. Query: `exam_id` (int), `status`
-(`SubmissionStatus`), both optional. **200** → `SubmissionOut[]` ordered by id:
+Any, **scoped**: admins see all, TAs only submissions they are assigned to (the review queue). Query: `exam_id` (int), `status`
+(`SubmissionStatus`), both optional, and `scope`: `mine` (default) or `exam`. `scope=exam` needs `exam_id` and `tab.papers` and returns **every
+paper of that exam** (for the read-only Papers tab; **404** for a TA not assigned to the exam, **422** without `exam_id`). Opening, reviewing
+or downloading a single paper stays limited to the caller's own papers either way. **200** → `SubmissionOut[]` ordered by id:
 
 ```json
 {"id": 7, "exam_id": 1,
  "student": {"id": 3, "external_id": "1001", "name": "Ann Lee"},
  "ta_ids": [2, 5], "status": "ready_for_review",
  "overall_confidence": 0.82,
- "grades_total": 4, "grades_reviewed": 1, "min_confidence": 0.55}
+ "grades_total": 4, "grades_reviewed": 1, "min_confidence": 0.55,
+ "score_total": 14.5, "max_score": 20.0}
 ```
 
 `grades_total`/`grades_reviewed` count grades and those no longer `pending`; `min_confidence` is the lowest
-per-question AI confidence. These three are only filled in by this list endpoint (they are `0`/`null` elsewhere).
+per-question AI confidence; `score_total`/`max_score` sum the effective scores (`final_score` when set, else
+`ai_score`) and question `max_points`. These five are only filled in by this list endpoint (they are `0`/`null`
+elsewhere).
 
 ### `GET /submissions/{submission_id}`
 Any, scoped. **200** → `SubmissionOut`. **404** if missing or not yours.
 
 ### `PUT /submissions/{submission_id}/assignment`
-Admin. Body `{"ta_ids": [2, 5]}`: **replaces** the set of assigned TAs (several are allowed; `[]` unassigns
+Needs `papers.manage` (admin). Body `{"ta_ids": [2, 5]}`: **replaces** the set of assigned TAs (several are allowed; `[]` unassigns
 everyone). **200** → `SubmissionOut`. **404** submission. **422** if any id is unknown or inactive.
 
 ### `PUT /submissions/bulk/assignment`
-Admin. Assigns TAs to several papers at once. Body `{"submission_ids": [3, 4], "ta_ids": [2, 5], "mode": "replace"}`.
+Needs `papers.manage` (admin). Assigns TAs to several papers at once. Body `{"submission_ids": [3, 4], "ta_ids": [2, 5], "mode": "replace"}`.
 `mode` is `replace` (default: each paper's TAs become exactly `ta_ids`; `[]` unassigns), `add` (keep the current TAs and
 add these), `remove` (take these off) or `round_robin` (deal the papers out in turn, by id, across the chosen TAs, adding each to
 that paper's existing TAs). **200** → `{"updated": 2}`. **404** if any submission is unknown.
 **422** unknown/inactive TA, or `add`/`remove`/`round_robin` with no TAs.
 
 ### `POST /submissions/bulk/delete`
-Admin. Permanently deletes several papers (what `DELETE /submissions/{id}` does for one). Body
+Needs `papers.manage` (admin). Permanently deletes several papers (what `DELETE /submissions/{id}` does for one). Body
 `{"submission_ids": [3, 4], "force": false}`. All or nothing. **200** → `{"deleted": 2}`. **404** if any id is unknown.
 **409** if any is being graded, or any holds TA-reviewed grades and `force` is false.
 
 ### `DELETE /submissions/{submission_id}`
-Admin. **Permanently deletes one paper**: its grades, page images, grading history and assignments, and the stored PDF.
+Needs `papers.manage` (admin). **Permanently deletes one paper**: its grades, page images, grading history and assignments, and the stored PDF.
 The student record stays. **204**. Query: `force` (bool, default `false`).
 
 | Status | When |
@@ -344,7 +392,7 @@ curl -s -b jar -X DELETE "$API/submissions/7?force=true"
 ## Import
 
 ### `POST /exams/{exam_id}/imports`
-Admin. `multipart/form-data`. Two layouts: **one PDF per student** named `<student_id>.pdf`, or **one combined
+Needs `tab.upload` (admin). `multipart/form-data`. Two layouts: **one PDF per student** named `<student_id>.pdf`, or **one combined
 PDF** with page ranges in the CSV. Preview with `dry_run=true`, then repeat with `dry_run=false`.
 Flow diagram: [workflows.md#3](workflows.md#3-import-decision-flow).
 
@@ -386,7 +434,7 @@ separately (see [Grading control](#grading-control)).
 active TAs.
 
 ### `POST /exams/{exam_id}/imports/auto-split`
-Admin. `multipart/form-data` with `file` (one combined PDF) and an optional **roster** `roll_numbers_csv` that limits
+Needs `tab.upload` (admin). `multipart/form-data` with `file` (one combined PDF) and an optional **roster** `roll_numbers_csv` that limits
 Claude to the roll numbers on it. Stages the PDF and queues a background job for the worker (Claude) to propose paper
 boundaries (`first_page`, `last_page`) and extract student roll numbers (`student_external_id`) and names. Claude is shown
 the top of every page tiled onto a few contact-sheet images, in one request
@@ -412,30 +460,30 @@ Returns `AutoSplitResult` (`split_token`, `filename`, `page_count`, `status`, `e
 an empty roll number, a duplicate roll number, a second-column header that is not a name column, and `;` or tab separators.
 
 ### `GET /exams/{exam_id}/imports/auto-split`
-Admin. Lists staged/background auto-split jobs for the exam (`AutoSplitResult[]`, newest first), so the UI can
+Needs `tab.upload` (admin). Lists staged/background auto-split jobs for the exam (`AutoSplitResult[]`, newest first), so the UI can
 resume in-progress or completed splits after leaving the page. **404** exam.
 
 ### `GET /exams/{exam_id}/imports/auto-split/{split_token}`
-Admin. Polls the status (`queued | processing | ready | failed`) and proposed splits of one auto-split job. **404** missing.
+Needs `tab.upload` (admin). Polls the status (`queued | processing | ready | failed`) and proposed splits of one auto-split job. **404** missing.
 
 ### `DELETE /exams/{exam_id}/imports/auto-split/{split_token}`
-Admin. Discards a staged auto-split job and deletes its temporary PDF. **204**. **404** missing.
+Needs `tab.upload` (admin). Discards a staged auto-split job and deletes its temporary PDF. **204**. **404** missing.
 
 ### `POST /exams/{exam_id}/imports/auto-split/{split_token}/retry`
-Admin. Requeues a failed (or ready) auto-split job using the already-staged PDF. **200** → `AutoSplitResult`. **404** missing. **409** if already `queued` or `processing`.
+Needs `tab.upload` (admin). Requeues a failed (or ready) auto-split job using the already-staged PDF. **200** → `AutoSplitResult`. **404** missing. **409** if already `queued` or `processing`.
 
 ### `GET /exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/thumb`
-Admin. A small preview of 1-based page `index` for the strip of page thumbnails: a **JPEG** rendered at 30 dpi (about
+Needs `tab.upload` (admin). A small preview of 1-based page `index` for the strip of page thumbnails: a **JPEG** rendered at 30 dpi (about
 15 KB, against about 770 KB for the full-size `/image`). Kept in server memory after the first request and cached by the
 browser for a day (`Cache-Control: private, max-age=86400`). **404** missing token or page out of range. Click-to-zoom uses
 `/image`.
 
 ### `GET /exams/{exam_id}/imports/auto-split/{split_token}/pages/{index}/image`
-Admin. Returns a PNG preview (`image/png`) of 1-based page `index` from the staged auto-split PDF so the admin
+Needs `tab.upload` (admin). Returns a PNG preview (`image/png`) of 1-based page `index` from the staged auto-split PDF so the admin
 can visually verify the proposed split and roll numbers. **404** invalid token, missing session, or out-of-range page.
 
 ### `POST /exams/{exam_id}/imports/auto-split/{split_token}/commit`
-Admin. Body `{"items": [{"student_external_id": str, "student_name": str, "first_page": int, "last_page": int, "ta_ids": [int]}]}`.
+Needs `tab.upload` (admin). Body `{"items": [{"student_external_id": str, "student_name": str, "first_page": int, "last_page": int, "ta_ids": [int]}]}`.
 Splits the staged PDF into per-student submissions, assigns the specified TAs, deletes the staged PDF, and
 returns `ImportResult`. **404** exam or split session. **422** empty/duplicate `student_external_id`, invalid/overlapping page ranges, or unknown/inactive TA.
 
@@ -443,7 +491,7 @@ returns `ImportResult`. **404** exam or split session. **422** empty/duplicate `
 
 ## Grading control
 
-All admin-only.
+Queueing and regrading need `papers.manage` (admin); `GET /grader/status` and `POST /grader/usage` are admin-only.
 
 Nothing is graded automatically: imported papers stay `uploaded` until an admin starts grading, for one paper
 (`regrade`), a selection (`bulk/grade`) or the whole exam (`queue`).
@@ -559,7 +607,7 @@ Any, scoped. Marks the paper `reviewed`. Idempotent. **200** → `SubmissionOut`
 is not reviewable, has no grades, or any grade is still `pending` (`"2 grade(s) still need review"`).
 
 ### `GET /exams/{exam_id}/export.csv`
-Admin. `text/csv` download (`Content-Disposition: attachment; filename="exam-{id}-grades.csv"`).
+Needs `papers.manage` (admin). `text/csv` download (`Content-Disposition: attachment; filename="exam-{id}-grades.csv"`).
 Columns, in order: `student_id, name`, one `Q<number>` score column per question (latest rubric), `total, status,
 graders`, then one `Q<number> feedback` column per question. Scores and totals come first so their positions are
 stable for spreadsheet formulas. A question's score and its feedback each use the TA's `final_*` value when set,
@@ -590,7 +638,7 @@ curl -s -b jar -o paper.pdf $API/submissions/7/export.pdf
 ```
 
 ### `GET /exams/{exam_id}/export.zip`
-Admin. Downloads a ZIP archive (`application/zip`, `Content-Disposition: attachment; filename="exam-{id}-papers.zip"`)
+Needs `papers.manage` (admin). Downloads a ZIP archive (`application/zip`, `Content-Disposition: attachment; filename="exam-{id}-papers.zip"`)
 containing one PDF (`<student_id>.pdf`) per submission in the exam: graded papers annotated with the marks summary first
 page, papers not graded yet as the original scan (the same rule as `export.pdf`). **404** exam.
 

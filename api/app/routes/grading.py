@@ -3,12 +3,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.auth import require_admin
+from app.auth import require_admin, require_permission
 from app.db import get_db
 from app.grader import GraderError, get_provider
+from app.permissions import Permission
 from app.models import Exam, Grade, GradeStatus, Rubric, Submission, SubmissionStatus
 
-router = APIRouter(tags=["grading"], dependencies=[Depends(require_admin)])
+router = APIRouter(tags=["grading"])
+
+papers_tab = Depends(require_permission(Permission.papers_manage))
 
 
 class QueueResult(BaseModel):
@@ -36,7 +39,7 @@ def _require_rubric(db: Session, exam_ids: set[int]) -> None:
             raise HTTPException(409, "Create a rubric before grading papers")
 
 
-@router.post("/exams/{exam_id}/queue", response_model=QueueResult)
+@router.post("/exams/{exam_id}/queue", response_model=QueueResult, dependencies=[papers_tab])
 def queue_exam(exam_id: int, db: Session = Depends(get_db)):
     """Grade everything that hasn't been graded: queue every submission that is uploaded or failed."""
     if not db.get(Exam, exam_id):
@@ -55,7 +58,7 @@ def queue_exam(exam_id: int, db: Session = Depends(get_db)):
     return QueueResult(queued=result.rowcount)
 
 
-@router.post("/submissions/bulk/grade", response_model=BulkGradeResult)
+@router.post("/submissions/bulk/grade", response_model=BulkGradeResult, dependencies=[papers_tab])
 def grade_selected(body: BulkGradeIn, db: Session = Depends(get_db)):
     """Start grading (or regrading) the chosen papers with the latest rubric. Papers already queued or being
     graded are skipped, and so are papers with TA-reviewed grades unless force=true."""
@@ -83,7 +86,7 @@ def grade_selected(body: BulkGradeIn, db: Session = Depends(get_db)):
     return BulkGradeResult(queued=queued, skipped=len(subs) - queued)
 
 
-@router.post("/submissions/{submission_id}/regrade", response_model=QueueResult)
+@router.post("/submissions/{submission_id}/regrade", response_model=QueueResult, dependencies=[papers_tab])
 def regrade(submission_id: int, body: RegradeIn, db: Session = Depends(get_db)):
     sub = db.get(Submission, submission_id)
     if not sub:
@@ -129,7 +132,7 @@ class UsageOut(BaseModel):
     windows: list[UsageWindow]
 
 
-@router.post("/grader/usage", response_model=UsageOut)
+@router.post("/grader/usage", response_model=UsageOut, dependencies=[Depends(require_admin)])
 def grader_usage():
     """Check the remaining quota now. Sends one tiny Haiku request (through the runner), so it is a POST and the UI
     only calls it when an admin presses the button."""
@@ -141,7 +144,7 @@ def grader_usage():
         raise HTTPException(502, str(e))
 
 
-@router.get("/grader/status")
+@router.get("/grader/status", dependencies=[Depends(require_admin)])
 def grader_status():
     """Is the grading backend usable? (e.g. is Claude logged in?) Shown as a banner to admins."""
     try:

@@ -523,6 +523,11 @@ Logging out goes to Tinyauth (`LOGOUT_URL`); the app keeps no session of its own
 
 ## 10. People and roles
 
+What each role sees is one table, `api/app/permissions.py` (`GET /auth/me` returns it as `permissions`): admins everything; TAs the Exams page and,
+inside an exam they are assigned to, a **read-only** Papers tab (marks, status, assigned TAs; no review links, downloads or edits), the Rubric (display only) and the
+**Overview** tab (papers graded/reviewed, mean, standard deviation, histograms with a selectable bar width, CSV export). The exam tabs are Papers, Rubric, Upload, Overview, Advanced;
+each is a `tab.*` permission, hidden in the UI and refused by the API without it, and changing anything needs a separate permission (`papers.manage`, `rubric.edit`).
+
 Accounts live in LLDAP. The app's `users` table is only a cache that papers, grades and assignments point at.
 
 ```mermaid

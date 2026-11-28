@@ -1,5 +1,6 @@
 import { defineMiddleware } from "astro:middleware";
 import { csrfBlocked, firstValue, parseAllowedHosts } from "./lib/csrf";
+import { pageAllowed } from "./lib/access";
 
 const API = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
 
@@ -67,7 +68,7 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
     if (!user && path !== "/login") return ctx.redirect("/login");
     if (user && path === "/login") return ctx.redirect("/");
   }
-  if (path.startsWith("/admin") && user?.role !== "admin") {
+  if (path.startsWith("/admin") && !(user && pageAllowed(path, user))) {
     return ctx.redirect("/");
   }
   return next();

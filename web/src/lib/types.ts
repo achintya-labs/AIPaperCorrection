@@ -3,7 +3,7 @@ export type SubmissionStatus =
   | "uploaded" | "queued" | "grading" | "ready_for_review" | "reviewed" | "failed";
 export type GradeStatus = "pending" | "reviewed" | "overridden";
 
-export interface User { id: number; email: string; name: string; role: Role }
+export interface User { id: number; email: string; name: string; role: Role; permissions: string[] }
 export interface UserAdmin extends User { active: boolean; has_password: boolean; assigned_papers: number; reviewed_grades: number }
 export interface Exam { id: number; name: string; model_override: string | null }
 export interface Criterion { description: string; points: number }
@@ -16,6 +16,19 @@ export interface Question {
   criteria: Criterion[];
 }
 export interface Rubric { id: number; exam_id: number; version: number; questions: Question[] }
+export interface OverviewSeries { count: number; mean: number | null; std_dev: number | null }
+export interface OverviewBin { start: number; end: number; graded: number; reviewed: number }
+export interface ExamOverview {
+  exam_id: number;
+  exam_name: string;
+  total_papers: number;
+  max_score: number | null;
+  graded: OverviewSeries;
+  reviewed: OverviewSeries;
+  bin_width: number;
+  auto_bin_width: number;
+  bins: OverviewBin[];
+}
 export interface Student { id: number; external_id: string; name: string }
 
 export interface Submission {
@@ -28,6 +41,8 @@ export interface Submission {
   grades_total: number;
   grades_reviewed: number;
   min_confidence: number | null;
+  score_total: number | null;
+  max_score: number | null;
 }
 export interface Page {
   index: number;
