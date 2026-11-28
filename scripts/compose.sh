@@ -13,12 +13,18 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 PROJECT=${COMPOSE_PROJECT_NAME:-papergrader}
 
+# EXTRA_DOMAINS: run.sh writes docker-compose.domains.yml (one more login portal per extra domain); use it when it is there.
+FILES=""
+[ ! -f docker-compose.domains.yml ] || FILES="-f docker-compose.yml -f docker-compose.domains.yml"
+
 if [ "${COMPOSE_RUNTIME:-podman}" = "docker" ]; then
-  exec docker compose -p "$PROJECT" "$@"
+  # shellcheck disable=SC2086
+  exec docker compose -p "$PROJECT" $FILES "$@"
 fi
 
 PC="$ROOT/.venv/bin/podman-compose"
 [ -x "$PC" ] || { echo "podman-compose is not installed in this repo yet. Run: ./scripts/setup-dev.sh" >&2; exit 1; }
 # Which gateway profile to start: from .env (AUTH_MODE=sso|local), default sso. Use `--profile` yourself to override.
 MODE=$(sed -n 's/^AUTH_MODE=//p' .env 2>/dev/null | head -1)
-exec "$PC" -p "$PROJECT" --profile "${MODE:-sso}" "$@"
+# shellcheck disable=SC2086
+exec "$PC" -p "$PROJECT" $FILES --profile "${MODE:-sso}" "$@"

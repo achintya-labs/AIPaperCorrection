@@ -152,7 +152,7 @@ Data lives in named volumes and survives restarts and crashes (see [how-it-runs.
 
 Two things to know before you deploy:
 
-- **`ALLOWED_HOSTS`** (runtime, in `.env`): the hostname(s) users browse to, or uploads fail the cross-site check. `run.sh` adds `<DOMAIN>`.
+- **`ALLOWED_HOSTS`** (runtime, in `.env`): the hostname(s) users browse to, or uploads fail the cross-site check. `run.sh` adds `<DOMAIN>` and every `EXTRA_DOMAINS` entry (more, unrelated domains serving the same app; see [how-it-runs.md](docs/how-it-runs.md)).
 - A Claude **subscription login** is meant for interactive personal use and has usage limits; check the terms before running a whole course
   on one. An API key (`ANTHROPIC_API_KEY`) is the supported route for an automated service.
 

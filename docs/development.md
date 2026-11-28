@@ -159,7 +159,7 @@ tar xzf papergrader-v1.0.0.tar.gz && cd papergrader-v1.0.0
 ```
 
 `run.sh` needs only Podman (it installs `podman-compose` into `./.venv` if missing). It generates `JWT_SECRET`, `CLAUDE_RUNNER_TOKEN`, `DB_PASSWORD`, the
-LLDAP and Tinyauth secrets and the LDAP admin password (printed once), sets `AUTH_MODE`, `DOMAIN`, `HTTPS_PORT`, `COOKIE_SECURE`, `ALLOWED_HOSTS` and
+LLDAP and Tinyauth secrets and the LDAP admin password (printed once), sets `AUTH_MODE`, `DOMAIN`, `HTTPS_PORT`, `EXTRA_DOMAINS` (when given; it also writes the gitignored `docker-compose.domains.yml` and `gateway/sites/domains.caddy` on every run), `COOKIE_SECURE`, `ALLOWED_HOSTS` and
 `PUBLIC_BASE_URL`, makes the self-signed gateway certificate in `gateway/tls/`, and never overwrites an existing `.env`. The release bundle
 carries `docker-compose.yml` pointing at the published `api`, `web`, `claude` and `gateway` images. Other commands: `up`, `down`, `restart`, `pull`, `pullup` (down, pull, up: the way to update to the newest release),
 `status`, `logs [service]`, `login`, `migrate` (manual: copy old users into LDAP). In a git checkout (it has `./api`) it builds the images locally instead.

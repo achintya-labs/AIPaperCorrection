@@ -2,13 +2,15 @@
 import "../styles.css";
 import DialogHost from "../components/DialogHost";
 import { can } from "../lib/access";
+import { logoutUrlFor } from "../lib/logout";
 
 interface Props { title: string; wide?: boolean }
 const { title, wide = false } = Astro.props;
 const user = Astro.locals.user;
 const path = Astro.url.pathname;
 const sso = (process.env.AUTH_MODE ?? "sso") !== "local";
-const logoutUrl = process.env.LOGOUT_URL ?? "";
+// Behind the gateway the Host header is the domain the person used; an extra domain has its own login portal to log out of.
+const logoutUrl = logoutUrlFor(Astro.request.headers.get("x-forwarded-host") ?? Astro.request.headers.get("host"), process.env.LOGOUT_URL ?? "", process.env.EXTRA_DOMAINS);
 ---
 <!doctype html>
 <html lang="en">

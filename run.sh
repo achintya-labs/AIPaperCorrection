@@ -26,6 +26,8 @@
 #   ./run.sh --domain lan.internal --admin-email me@example.edu                  (sso)
 #   ./run.sh --auth-mode local --host grader.example.edu --admin-email me@...    (local)
 #   --domain D               sso: base domain; the app is at D itself, the login portal auth.D, user admin lldap.D
+#   --extra-domains A,B      sso: more, unrelated domains that serve the same app (stored as EXTRA_DOMAINS in .env). Each gets its own
+#                            login portal auth.X (its own Tinyauth), because one login can't span unrelated domains. "" removes them.
 #   --auth-mode M            sso (default) or local
 #   --host H                 local: name or IP people will browse to (repeatable)
 #   --admin-email E          first admin's email
@@ -59,7 +61,7 @@ rand_hex() {
 }
 
 # ---------------------------------------------------------------- options
-HOSTS=""; ADMIN_EMAIL=""; HTTPS_PORT_ARG=""; DOMAIN_ARG=""; AUTHMODE_ARG=""
+HOSTS=""; ADMIN_EMAIL=""; HTTPS_PORT_ARG=""; DOMAIN_ARG=""; AUTHMODE_ARG=""; EXTRA_ARG=""; EXTRA_SET=0
 CMD=""; REST=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -67,6 +69,7 @@ while [ $# -gt 0 ]; do
     --admin-email) [ $# -ge 2 ] || die "--admin-email needs a value"; ADMIN_EMAIL=$2; shift 2 ;;
     --https-port) [ $# -ge 2 ] || die "--https-port needs a value"; HTTPS_PORT_ARG=$2; shift 2 ;;
     --domain) [ $# -ge 2 ] || die "--domain needs a value"; DOMAIN_ARG=$2; shift 2 ;;
+    --extra-domains) [ $# -ge 2 ] || die "--extra-domains needs a value (a comma-separated list, or \"\" to remove them)"; EXTRA_ARG=$2; EXTRA_SET=1; shift 2 ;;
     --auth-mode) [ $# -ge 2 ] || die "--auth-mode needs sso or local"; AUTHMODE_ARG=$2; shift 2 ;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1 (see ./run.sh --help)" ;;
@@ -123,7 +126,9 @@ else
   PC=$PWD/.venv/bin/podman-compose
 fi
 AUTH_MODE=sso  # set for real once .env exists (below)
-compose() { "$PC" -p papergrader --profile "$AUTH_MODE" "$@"; }
+COMPOSE_FILES=""  # becomes "-f docker-compose.yml -f docker-compose.domains.yml" when there are extra domains (render_domains)
+# shellcheck disable=SC2086
+compose() { "$PC" -p papergrader $COMPOSE_FILES --profile "$AUTH_MODE" "$@"; }
 compose_setup() { "$PC" -p papergrader --profile sso --profile setup "$@"; }  # the one-shot setup containers (run --rm)
 
 # A release bundle has no source tree: its compose file names the published "latest" images, which are pulled.
@@ -237,6 +242,131 @@ if [ "$AUTH_MODE" = sso ] && [ "$CREATED_ENV" = 0 ] && [ -n "$(env_get DOMAIN)" 
   [ "$(env_get PUBLIC_BASE_URL)" != "https://app.$d:$p" ] || setenv PUBLIC_BASE_URL "https://$d:$p"
 fi
 
+# ---------------------------------------------------------------- extra domains (sso)
+# EXTRA_DOMAINS=a.org,b.com serves the same app on more, unrelated domains. Tinyauth's session cookie belongs to the parent of its portal's
+# domain, so one login can't span unrelated domains: every extra domain X gets its own portal auth.X, run by its own Tinyauth (tinyauth-N).
+# All of them use the same users (LLDAP), the same app and the same published port. Generated on every run, never edited by hand:
+#   gateway/sites/domains.caddy      the Caddy sites for each extra domain (imported by gateway/Caddyfile)
+#   docker-compose.domains.yml       the tinyauth-N services (added with -f; removed again when EXTRA_DOMAINS is empty)
+# Browsers may reach a domain on a port other than HTTPS_PORT (HTTPS_PORT is where the gateway container is published; an nginx or other proxy in front
+# of it can listen on 443 or anything else). The ports the PEOPLE use are PUBLIC_PORT (the base domain; default HTTPS_PORT) and an optional
+# ":port" on each EXTRA_DOMAINS entry (default PUBLIC_PORT). Port 443 is left out of URLs.
+port_suffix() { case "$1" in ""|443) ;; *) printf ':%s' "$1" ;; esac; }
+domain_names() { o=""; for x in $1; do o="$o ${x%%:*}"; done; printf '%s' "${o# }"; }  # "a.org:8443 b.com" -> "a.org b.com"
+normalize_extra_domains() { # prints the cleaned, space-separated name[:port] list; dies on a bad entry
+  primary=$(env_get DOMAIN | tr 'A-Z' 'a-z'); out=""; seen=""
+  for raw in $(printf '%s' "$1" | tr ',' ' ' | tr 'A-Z' 'a-z'); do
+    e=${raw%%:*}; port=""
+    case "$raw" in *:*) port=${raw#*:}
+      case "$port" in ""|*[!0-9]*) die "EXTRA_DOMAINS: '$raw' has a bad port (use name:port, for example grader.other.org:443)" ;; esac
+      [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "EXTRA_DOMAINS: port $port in '$raw' is out of range" ;;
+    esac
+    case "$e" in
+      ""|*[!a-z0-9.-]*|.*|*.|*..*|-*|*.-*|*-.*) die "EXTRA_DOMAINS: '$e' is not a valid domain name" ;;
+      *.*) ;;
+      *) die "EXTRA_DOMAINS: '$e' needs at least two labels (for example lan.internal)" ;;
+    esac
+    case "$e" in "$primary") die "EXTRA_DOMAINS: '$e' is already DOMAIN" ;; *".$primary") die "EXTRA_DOMAINS: '$e' is a subdomain of DOMAIN ($primary). It already shares the login cookie: just add it to ALLOWED_HOSTS instead" ;; esac
+    case "$primary" in *".$e") die "EXTRA_DOMAINS: DOMAIN ($primary) is a subdomain of '$e'; they share one login cookie, so use '$e' as DOMAIN and list the other as an alias in ALLOWED_HOSTS" ;; esac
+    case " $seen " in *" $e "*) die "EXTRA_DOMAINS: '$e' is listed twice" ;; esac
+    seen="$seen $e"; out="$out $e${port:+:$port}"
+  done
+  printf '%s' "${out# }"
+}
+
+render_domains() {
+  COMPOSE_FILES=""
+  [ "$AUTH_MODE" = sso ] || return 0
+  mkdir -p gateway/sites  # bind-mount source must exist
+  list=$(normalize_extra_domains "$(env_get EXTRA_DOMAINS)")
+  defp=$(env_get PUBLIC_PORT); [ -n "$defp" ] || defp=$(env_get HTTPS_PORT)
+  caddy=gateway/sites/domains.caddy
+  yml=docker-compose.domains.yml
+  {
+    echo "# Generated by run.sh from EXTRA_DOMAINS in .env. Do not edit."
+    n=0
+    for item in $list; do
+      e=${item%%:*}
+      n=$((n+1))
+      printf '\n%s {\n\timport /etc/caddy/tls/*.caddy\n\n\timport paper_grader tinyauth-%s\n}\n' "$e" "$n"
+      printf '\nauth.%s {\n\timport /etc/caddy/tls/*.caddy\n\n\treverse_proxy tinyauth-%s:3000\n}\n' "$e" "$n"
+    done
+  } > "$caddy"
+  if [ -z "$list" ]; then rm -f "$yml"; return 0; fi
+  {
+    echo "# Generated by run.sh from EXTRA_DOMAINS in .env. Do not edit. Keep each service in step with \`tinyauth\` in docker-compose.yml."
+    echo "services:"
+    n=0
+    for item in $list; do
+      e=${item%%:*}; ep=${item#*:}; [ "$ep" != "$item" ] || ep=$defp  # the port people use on this domain
+      n=$((n+1))
+      cat <<YML
+  tinyauth-$n:
+    profiles: ["sso"]
+    image: ghcr.io/tinyauthapp/tinyauth:\${TINYAUTH_VERSION:-v5.2.0}
+    environment:
+      TINYAUTH_APPURL: https://auth.$e$(port_suffix "$ep")
+      TINYAUTH_AUTH_SECURECOOKIE: "true"
+      TINYAUTH_UI_TITLE: \${LOGIN_TITLE:-Paper Grader}
+      TINYAUTH_UI_FORGOTPASSWORDMESSAGE: \${LOGIN_FORGOT_MESSAGE:-Ask the administrator to reset your password.}
+      TINYAUTH_AUTH_USERS: \${TINYAUTH_USERS:-}
+      TINYAUTH_OAUTH_PROVIDERS_GOOGLE_CLIENTID: \${GOOGLE_CLIENT_ID:-}
+      TINYAUTH_OAUTH_PROVIDERS_GOOGLE_CLIENTSECRET: \${GOOGLE_CLIENT_SECRET:-}
+      TINYAUTH_OAUTH_WHITELIST: \${OAUTH_WHITELIST:-}
+      TINYAUTH_LDAP_ADDRESS: ldap://lldap:3890
+      TINYAUTH_LDAP_BINDDN: uid=\${LDAP_OBSERVER_USER:-tinyauth_observer},ou=people,\${LDAP_BASE_DN:-dc=example,dc=com}
+      TINYAUTH_LDAP_BINDPASSWORD: \${LDAP_OBSERVER_PASSWORD:-}
+      TINYAUTH_LDAP_BASEDN: \${LDAP_BASE_DN:-dc=example,dc=com}
+      TINYAUTH_LDAP_SEARCHFILTER: (uid=%s)
+      TINYAUTH_LDAP_INSECURE: "true"
+    networks: [default, edge]
+    depends_on:
+      lldap:
+        condition: service_healthy
+    restart: unless-stopped
+
+YML
+    done
+    # Caddy has to resolve tinyauth-N when it starts, so it waits for them (they are long-running, never one-shots).
+    echo "  caddy:"
+    echo "    depends_on:"
+    n=0; for item in $list; do n=$((n+1)); printf '      tinyauth-%s:\n        condition: service_started\n' "$n"; done
+  } > "$yml"
+  COMPOSE_FILES="-f docker-compose.yml -f $yml"
+}
+
+# PUBLIC_PORT: people reach the base domain on a port other than HTTPS_PORT (a proxy in front of the gateway). The URLs that go to browsers
+# (the login portal Tinyauth redirects to, Log out, the LLDAP link) must then use it. Only rewritten while PUBLIC_PORT is set.
+if [ "$AUTH_MODE" = sso ] && [ -n "$(env_get PUBLIC_PORT)" ]; then
+  pp=$(env_get PUBLIC_PORT); d=$(env_get DOMAIN)
+  case "$pp" in *[!0-9]*) die "PUBLIC_PORT in .env must be a port number (found '$pp')" ;; esac
+  sfx=$(port_suffix "$pp")
+  setenv PUBLIC_BASE_URL "https://$d$sfx"
+  setenv AUTH_URL "https://auth.$d$sfx"
+  setenv LOGOUT_URL "https://auth.$d$sfx/logout"
+  setenv LDAP_ADMIN_URL "https://lldap.$d$sfx"
+fi
+
+# --extra-domains writes EXTRA_DOMAINS; every extra domain is also an allowed host (uploads fail the cross-site check otherwise).
+if [ "$AUTH_MODE" = sso ]; then
+  if [ "$EXTRA_SET" = 1 ]; then setenv EXTRA_DOMAINS "$(normalize_extra_domains "$EXTRA_ARG")"; fi
+  # gateway/sites/.hosts remembers the hosts added here, so one dropped from EXTRA_DOMAINS is taken out of ALLOWED_HOSTS again
+  # (a host you put there yourself is never recorded, so it is never removed).
+  mkdir -p gateway/sites
+  want=$(domain_names "$(normalize_extra_domains "$(env_get EXTRA_DOMAINS)")"); kept=""
+  for h in $(cat gateway/sites/.hosts 2>/dev/null || true); do
+    case " $want " in
+      *" $h "*) kept="$kept $h" ;;
+      *) setenv ALLOWED_HOSTS "$(env_get ALLOWED_HOSTS | tr ',' '\n' | grep -vxF "$h" | paste -sd, -)"; echo "Removed $h from ALLOWED_HOSTS (no longer in EXTRA_DOMAINS)." ;;
+    esac
+  done
+  for e in $want; do
+    case ",$(env_get ALLOWED_HOSTS)," in *",$e,"*) ;; *) setenv ALLOWED_HOSTS "$(env_get ALLOWED_HOSTS),$e"; kept="$kept $e" ;; esac
+  done
+  printf '%s\n' "${kept# }" > gateway/sites/.hosts
+  render_domains
+fi
+
 # ---------------------------------------------------------------- commands
 need_published() { [ "$PUBLISHED" = 1 ] || die "pull needs a release bundle (this is a git checkout). In a git checkout the images are built locally."; }
 # Is a newer release out? Compares the version label of the local api image with the latest GitHub release.
@@ -311,26 +441,30 @@ build_images() {
   compose build || die "image build failed (see the output above)"
 }
 
-# sso: a SELF-SIGNED certificate for <DOMAIN>, auth.<DOMAIN> and lldap.<DOMAIN>, handed to Caddy through gateway/tls/tls.caddy. (Caddy's own CA
+# sso: a SELF-SIGNED certificate for <DOMAIN>, auth.<DOMAIN> and lldap.<DOMAIN> (and each EXTRA_DOMAINS name with its auth.), handed to Caddy through gateway/tls/tls.caddy. (Caddy's own CA
 # would need its root trusted in every browser, and a browser that has met another "Caddy Local Authority" before rejects the
 # new one with "certificate has an invalid signature".) To use a real certificate, replace the three files in gateway/tls/ and
-# delete gateway/tls/.domain so it is not regenerated. Regenerated automatically when DOMAIN changes.
+# delete gateway/tls/.domain so it is not regenerated. Regenerated automatically when DOMAIN or EXTRA_DOMAINS changes.
 make_gateway_cert() {
   d=$(env_get DOMAIN)
+  extras=$(domain_names "$(normalize_extra_domains "$(env_get EXTRA_DOMAINS)")")
+  names="$d${extras:+ $extras}"  # remembered in .domain: the certificate is remade when this list changes
   mkdir -p gateway/tls
   if [ -f gateway/tls/wildcard.crt ] && [ -f gateway/tls/wildcard.key ] && [ -f gateway/tls/tls.caddy ] \
-     && { [ ! -f gateway/tls/.domain ] || [ "$(cat gateway/tls/.domain)" = "$d" ]; }; then return 0; fi
+     && { [ ! -f gateway/tls/.domain ] || [ "$(cat gateway/tls/.domain)" = "$names" ]; }; then return 0; fi
+  sans="DNS:$d,DNS:auth.$d,DNS:lldap.$d,DNS:*.$d"
+  for e in $extras; do sans="$sans,DNS:$e,DNS:auth.$e,DNS:*.$e"; done
   command -v openssl >/dev/null 2>&1 || die "openssl is needed once to make the self-signed certificate. Install it, or put your own certificate in gateway/tls/ (wildcard.crt, wildcard.key, tls.caddy)."
   ( umask 077
     openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
       -keyout gateway/tls/wildcard.key -out gateway/tls/wildcard.crt \
-      -subj "/CN=$d" -addext "subjectAltName=DNS:$d,DNS:auth.$d,DNS:lldap.$d,DNS:*.$d" 2>/dev/null ) \
+      -subj "/CN=$d" -addext "subjectAltName=$sans" 2>/dev/null ) \
     || die "could not create the self-signed certificate for $d"
   chmod 644 gateway/tls/wildcard.crt
   chmod 600 gateway/tls/wildcard.key  # Caddy runs as the container's root, which is this user under rootless Podman
   printf 'tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key\n' > gateway/tls/tls.caddy
-  printf '%s\n' "$d" > gateway/tls/.domain
-  echo "Wrote a self-signed certificate for $d, auth.$d and lldap.$d (gateway/tls/, valid 365 days)."
+  printf '%s\n' "$names" > gateway/tls/.domain
+  echo "Wrote a self-signed certificate for $d, auth.$d and lldap.$d${extras:+, and for each of: $extras (with auth.<name>)} (gateway/tls/, valid 365 days)."
 }
 
 # sso: the one-shot setup (create the lldap database, then the read-only account, groups and first admin), done BEFORE the long-running
@@ -374,6 +508,10 @@ do_down() {
     if podman container exists "papergrader_${svc}_1" 2>/dev/null; then
       podman rm -f "papergrader_${svc}_1" >/dev/null 2>&1 || warn "could not remove papergrader_${svc}_1"
     fi
+  done
+  # tinyauth-N belong to EXTRA_DOMAINS: a name removed from .env is no longer in the compose files, so remove its container here.
+  for c in $(podman ps -a --format '{{.Names}}' 2>/dev/null | grep '^papergrader_tinyauth-[0-9][0-9]*_1$' || true); do
+    podman rm -f "$c" >/dev/null 2>&1 || warn "could not remove $c"
   done
   compose down
 }
@@ -426,11 +564,15 @@ do_up() {
   compose up -d --force-recreate
   echo
   if [ "$AUTH_MODE" = sso ]; then
-    d=$(env_get DOMAIN); p=$(env_get HTTPS_PORT)
-    echo "Running. Open  https://$d:$p   (self-signed certificate: the browser warns once for each of $d, auth.$d and lldap.$d;"
+    d=$(env_get DOMAIN); p=$(env_get PUBLIC_PORT); [ -n "$p" ] || p=$(env_get HTTPS_PORT)
+    echo "Running. Open  https://$d$(port_suffix "$p")   (self-signed certificate: the browser warns once for each of $d, auth.$d and lldap.$d;"
     echo "accept it on auth.$d too, because signing in redirects there)"
     echo "On every machine that browses to it, /etc/hosts needs:  <this machine's IP>  $d auth.$d lldap.$d"
-    echo "People are managed in LLDAP at https://lldap.$d:$p (user 'admin', password LLDAP_ADMIN_PASSWORD in .env);"
+    for item in $(normalize_extra_domains "$(env_get EXTRA_DOMAINS)"); do
+      e=${item%%:*}; ep=${item#*:}; [ "$ep" != "$item" ] || ep=$p
+      echo "Also served at https://$e$(port_suffix "$ep") (own login portal auth.$e; sessions are per domain); /etc/hosts:  <this machine's IP>  $e auth.$e"
+    done
+    echo "People are managed in LLDAP at https://lldap.$d$(port_suffix "$p") (user 'admin', password LLDAP_ADMIN_PASSWORD in .env);"
     ag=$(env_get LDAP_ADMIN_GROUP); tg=$(env_get LDAP_TA_GROUP)
     echo "put them in the group ${ag:-papergrader_admins} (admins) or ${tg:-papergrader_tas} (TAs) to give them access."
   else

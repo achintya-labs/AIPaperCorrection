@@ -151,6 +151,8 @@ services:
       LOGOUT_URL: ${LOGOUT_URL:-}
       # Where the Admin page links to for managing accounts (the LLDAP UI).
       LDAP_ADMIN_URL: ${LDAP_ADMIN_URL:-}
+      # Extra domains the app is served on: "Log out" goes to that domain's own login portal.
+      EXTRA_DOMAINS: ${EXTRA_DOMAINS:-}
     depends_on:
       api:
         condition: service_healthy
@@ -195,6 +197,7 @@ services:
       - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-5904}:443"
     volumes:
       - ./gateway/tls:/etc/caddy/tls:ro,z
+      - ./gateway/sites:/etc/caddy/sites:ro,z  # the sites for EXTRA_DOMAINS, written by run.sh
       - caddy_data:/data
       - caddy_config:/config
     networks: [default, edge]
@@ -205,11 +208,14 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # EXTRA_DOMAINS: run.sh writes one more copy of this service per extra domain into docker-compose.domains.yml (tinyauth-1, ...,
+  # each with its own TINYAUTH_APPURL). Keep them in step: a setting added here belongs in render_domains in run.sh too.
   tinyauth:
     profiles: ["sso"]
     image: ghcr.io/tinyauthapp/tinyauth:${TINYAUTH_VERSION:-v5.2.0}
     environment:
-      TINYAUTH_APPURL: https://auth.${DOMAIN:-lan.internal}:${HTTPS_PORT:-5904}
+      # AUTH_URL is the portal address people use when it is not DOMAIN:HTTPS_PORT (PUBLIC_PORT in .env; run.sh writes it)
+      TINYAUTH_APPURL: ${AUTH_URL:-https://auth.${DOMAIN:-lan.internal}:${HTTPS_PORT:-5904}}
       TINYAUTH_AUTH_SECURECOOKIE: "true"
       # The login screen's wording (set LOGIN_TITLE / LOGIN_FORGOT_MESSAGE in .env to change it)
       TINYAUTH_UI_TITLE: ${LOGIN_TITLE:-Paper Grader}

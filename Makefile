@@ -1,4 +1,4 @@
-.PHONY: cert help setup test test-api test-web test-pg test-claude ci-lint up down restart pull pullup rebuild logs ps migrate
+.PHONY: cert help setup test test-api test-web test-pg test-claude ci-lint up down restart pull pullup rebuild logs ps migrate domains
 
 # Everything that touches containers goes through run.sh (profile for AUTH_MODE, images, certs, LLDAP setup), never a bare podman-compose.
 RUN := ./run.sh
@@ -10,9 +10,10 @@ help:
 	@echo "make test-claude  live smoke-test against the running claude container"
 	@echo "make up           ./run.sh up: start (or recreate) the stack for your AUTH_MODE"
 	@echo "make test-pg  Postgres-only tests against a throwaway container (podman or docker)"
-	@echo "make rebuild      rebuild api/worker/web/claude images and recreate those containers"
+	@echo "make rebuild      rebuild api/worker/web/claude images and recreate those containers (not the gateway: after changing domains use make restart or make domains)"
 	@echo "make down         ./run.sh down: stop and remove containers (volumes and data are kept)"
 	@echo "make restart      ./run.sh restart;  make pull / pullup  download / update to the latest images"
+	@echo "make domains DOMAINS=a.org,b.com:8443   serve the app on more domains (EXTRA_DOMAINS; DOMAINS= empty removes them), then restart"
 	@echo "make migrate      ./run.sh migrate: copy existing users into LLDAP (sso, manual)"
 	@echo "make logs         follow logs;  make ps  show containers   (both via ./run.sh)"
 
@@ -57,6 +58,11 @@ pullup:
 
 migrate:
 	$(RUN) migrate
+
+# Extra domains: each gets its own login portal; run.sh writes the generated compose/Caddy files, validates the list and remakes the certificate.
+domains:
+	@[ "$${DOMAINS+set}" = set ] || { echo "usage: make domains DOMAINS=a.org,b.com   (a name may end in :port; DOMAINS= removes them)"; exit 2; }
+	$(RUN) --extra-domains "$(DOMAINS)" restart
 
 rebuild:
 	$(RUN) compose build api worker web claude

@@ -55,7 +55,7 @@ flowchart LR
 | Service | Image / code | Responsibility | Holds |
 |---|---|---|---|
 | `caddy` | `gateway/Dockerfile` (Caddy + Coraza + OWASP CRS), `gateway/Caddyfile` | sso only. The **only published port**. WAF first, then Tinyauth `forward_auth`, then `web`. Serves `<DOMAIN>` (the app), `auth.<DOMAIN>` and `lldap.<DOMAIN>` with a self-signed certificate from `gateway/tls/` | the TLS key |
-| `tinyauth` | `ghcr.io/tinyauthapp/tinyauth` | sso only. Login portal; checks LDAP (and optionally Google); tells Caddy to add `Remote-User/Name/Email` | LDAP read-only bind password |
+| `tinyauth` | `ghcr.io/tinyauthapp/tinyauth` | sso only. Login portal; checks LDAP (and optionally Google); tells Caddy to add `Remote-User/Name/Email`. With `EXTRA_DOMAINS` there is one more instance per extra domain (`tinyauth-N`, generated into `docker-compose.domains.yml`) because its session cookie belongs to a single domain; Caddy picks the instance by the domain asked for | LDAP read-only bind password |
 | `lldap` | `lldap/lldap` on Postgres | sso only. The user directory and its admin UI: users, passwords, the two role groups | its Postgres password, JWT secret, key seed |
 | `lldap-db-init`, `lldap-bootstrap` | `postgres:16`, `lldap/lldap` | sso only, one-shots (profile `setup`) that `./run.sh up` runs with `--rm` before the services above: create the `lldap` role/database; create the read-only account, the groups and the first admin. They never import people (that is `./run.sh migrate`), and nothing depends on them, so reboots can restart everything | |
 | `proxy` | `nginx` | local mode only: the old HTTPS front door | the TLS key |

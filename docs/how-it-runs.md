@@ -86,6 +86,26 @@ browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, option
   isn't used: every browser would have to trust its root, and one that has met another "Caddy Local Authority" rejects the new one with
   "invalid signature".) For a real certificate, replace `wildcard.crt`, `wildcard.key` and `tls.caddy` in `gateway/tls/` and delete
   `gateway/tls/.domain` (see the comment at the top of [gateway/Caddyfile](../gateway/Caddyfile)).
+- **More domains (`EXTRA_DOMAINS`).** To serve the same app on other, unrelated domains, list them in `.env`
+  (`EXTRA_DOMAINS=grader.other.org,papers.example.com`, or `./run.sh --extra-domains a.org,b.org`; blank removes them) and run `./run.sh restart`.
+  Tinyauth's login cookie belongs to one domain, so each extra domain `X` gets its own login portal `auth.X` run by its own Tinyauth
+  (`tinyauth-1`, `tinyauth-2`, ... in the generated `docker-compose.domains.yml`; the Caddy sites go in `gateway/sites/domains.caddy`;
+  both are rewritten on every run, are gitignored, and the generated services also reach the same LLDAP). Everything else is shared: the users, the
+  app, the one published port. What to know:
+  - People **sign in separately on each domain**; "Log out" goes to the portal of the domain they are on.
+  - The self-signed certificate gains `X`, `auth.X` and `*.X` (redone when the list changes), `ALLOWED_HOSTS` gains `X`, and every browsing machine needs
+    `<this machine's IP>  X auth.X` in `/etc/hosts`; accept the certificate warning for `X` and `auth.X`. A real certificate must cover them too.
+  - With Google sign-in, add `https://auth.X:<port>/api/oauth/callback/google` as a redirect URI in the Google console for each domain.
+  - LLDAP's admin UI stays on `lldap.<DOMAIN>` only. A subdomain of `DOMAIN` (say `grader.<DOMAIN>`) shares the primary's cookie, so it isn't an extra
+    domain: add it to `ALLOWED_HOSTS` (and the certificate) instead; `run.sh` refuses it.
+  - **Different public ports.** `HTTPS_PORT` is where the gateway container is published; if an nginx (or similar) in front of it serves
+    people on another port, set `PUBLIC_PORT` for the base domain (blank = `HTTPS_PORT`) and, where it differs, `name:port` on an extra domain
+    (`EXTRA_DOMAINS=grader.other.org:443,papers.example.com:8443`; no port = `PUBLIC_PORT`). Port 443 is left out of URLs. `run.sh` then derives
+    the login-portal address Tinyauth redirects to (`AUTH_URL`), `LOGOUT_URL`, `LDAP_ADMIN_URL` and `PUBLIC_BASE_URL` from them (while `PUBLIC_PORT` is set it
+    rewrites those four on every run) and uses each domain's port for its own portal. The proxy must forward the `Host` header with its port
+    (the cross-site check compares it with `Origin`), pass the TLS server name when it connects over HTTPS to the gateway, and not verify the
+    self-signed certificate (or use a real one).
+  - Compose by hand needs both files: `./scripts/compose.sh` and `./run.sh compose` add them when `docker-compose.domains.yml` exists.
 - **Who may use the app is decided by LDAP groups.** Tinyauth authenticates the person and passes `Remote-User`, `Remote-Name`
   and `Remote-Email`. The API looks the email up in LDAP (a read-only bind account): members of **`papergrader_admins`** are admins,
   members of **`papergrader_tas`** are TAs, anyone in neither gets "not enrolled" (403). Manage people in LLDAP
@@ -180,6 +200,8 @@ Rows marked *not wired* have a default in `api/app/config.py` but are not passed
 | `API_INTERNAL_URL` | `http://api:8000` (compose) | web | Where the proxy forwards `/api/*` |
 | `AUTH_MODE` | `sso` | api, worker, web | `sso`: the gateway signs people in and LDAP decides roles; `local`: the app's own password / Google login. `run.sh` writes it |
 | `DOMAIN` | `lan.internal` | caddy, tinyauth | Base domain: the app is `<DOMAIN>`, the login portal `auth.<DOMAIN>`, user admin `lldap.<DOMAIN>` (two or more labels) |
+| `PUBLIC_PORT` | `HTTPS_PORT` | caddy-side URLs, tinyauth, web | The port people use for the base domain when a proxy in front of the gateway listens elsewhere (see "Different public ports") |
+| `EXTRA_DOMAINS` | empty | caddy, web, extra tinyauth | More unrelated domains serving the same app, comma-separated, each with its own login portal `auth.<name>` (see "More domains" above) |
 | `HTTPS_PORT`, `HTTPS_BIND` | `5904` (sso) / `8443` (local), `0.0.0.0` | caddy / proxy | The one published HTTPS port and the interface it listens on. Rootless Podman can't bind below 1024 |
 | `ACME_EMAIL` | `admin@example.com` | caddy | Only for public domains (Let's Encrypt); unused with the self-signed certificate |
 | `LDAP_BASE_DN` | `dc=example,dc=com` | lldap, tinyauth, api | The directory's base DN |
