@@ -288,8 +288,8 @@ render_domains() {
     for item in $list; do
       e=${item%%:*}
       n=$((n+1))
-      printf '\n%s {\n\timport /etc/caddy/tls/*.caddy\n\n\timport paper_grader tinyauth-%s\n}\n' "$e" "$n"
-      printf '\nauth.%s {\n\timport /etc/caddy/tls/*.caddy\n\n\treverse_proxy tinyauth-%s:3000\n}\n' "$e" "$n"
+      printf '\n%s {\n\timport /etc/caddy/tls/%s/tls.caddy\n\n\timport paper_grader tinyauth-%s\n}\n' "$e" "$e" "$n"
+      printf '\nauth.%s {\n\timport /etc/caddy/tls/%s/tls.caddy\n\n\treverse_proxy tinyauth-%s:3000\n}\n' "$e" "$e" "$n"
     done
   } > "$caddy"
   if [ -z "$list" ]; then rm -f "$yml"; return 0; fi
@@ -441,30 +441,41 @@ build_images() {
   compose build || die "image build failed (see the output above)"
 }
 
-# sso: a SELF-SIGNED certificate for <DOMAIN>, auth.<DOMAIN> and lldap.<DOMAIN> (and each EXTRA_DOMAINS name with its auth.), handed to Caddy through gateway/tls/tls.caddy. (Caddy's own CA
-# would need its root trusted in every browser, and a browser that has met another "Caddy Local Authority" before rejects the
-# new one with "certificate has an invalid signature".) To use a real certificate, replace the three files in gateway/tls/ and
-# delete gateway/tls/.domain so it is not regenerated. Regenerated automatically when DOMAIN or EXTRA_DOMAINS changes.
-make_gateway_cert() {
-  d=$(env_get DOMAIN)
-  extras=$(domain_names "$(normalize_extra_domains "$(env_get EXTRA_DOMAINS)")")
-  names="$d${extras:+ $extras}"  # remembered in .domain: the certificate is remade when this list changes
-  mkdir -p gateway/tls
-  if [ -f gateway/tls/wildcard.crt ] && [ -f gateway/tls/wildcard.key ] && [ -f gateway/tls/tls.caddy ] \
-     && { [ ! -f gateway/tls/.domain ] || [ "$(cat gateway/tls/.domain)" = "$names" ]; }; then return 0; fi
-  sans="DNS:$d,DNS:auth.$d,DNS:lldap.$d,DNS:*.$d"
-  for e in $extras; do sans="$sans,DNS:$e,DNS:auth.$e,DNS:*.$e"; done
-  command -v openssl >/dev/null 2>&1 || die "openssl is needed once to make the self-signed certificate. Install it, or put your own certificate in gateway/tls/ (wildcard.crt, wildcard.key, tls.caddy)."
+# sso: SELF-SIGNED certificates, one per domain, made only when that domain has none (an existing certificate is never touched, so a real one
+# you put in place stays). The base domain's lives in gateway/tls/ (wildcard.crt, wildcard.key, tls.caddy; covers <DOMAIN>, auth.<DOMAIN>,
+# lldap.<DOMAIN>); each extra domain's in gateway/tls/<name>/ (the same three files; covers <name> and auth.<name>). Caddy takes each domain's
+# certificate through its tls.caddy. (Caddy's own CA would need its root trusted in every browser, and a browser that has met another "Caddy Local
+# Authority" before rejects the new one with "certificate has an invalid signature".) To use a real certificate, replace the three files of that
+# domain (the file names must stay). Certificates of domains removed from EXTRA_DOMAINS are left in place, in case you add them back.
+make_cert_in() { # make_cert_in DIR NAME SANS  (DIR under gateway/tls; "" = the base domain's, in gateway/tls itself)
+  dir=gateway/tls${1:+/$1}; name=$2; sans=$3
+  if [ -f "$dir/wildcard.crt" ] && [ -f "$dir/wildcard.key" ] && [ -f "$dir/tls.caddy" ]; then return 0; fi
+  command -v openssl >/dev/null 2>&1 || die "openssl is needed once to make the self-signed certificate. Install it, or put your own certificate in $dir/ (wildcard.crt, wildcard.key, tls.caddy)."
+  mkdir -p "$dir"
   ( umask 077
     openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
-      -keyout gateway/tls/wildcard.key -out gateway/tls/wildcard.crt \
-      -subj "/CN=$d" -addext "subjectAltName=$sans" 2>/dev/null ) \
-    || die "could not create the self-signed certificate for $d"
-  chmod 644 gateway/tls/wildcard.crt
-  chmod 600 gateway/tls/wildcard.key  # Caddy runs as the container's root, which is this user under rootless Podman
-  printf 'tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key\n' > gateway/tls/tls.caddy
-  printf '%s\n' "$names" > gateway/tls/.domain
-  echo "Wrote a self-signed certificate for $d, auth.$d and lldap.$d${extras:+, and for each of: $extras (with auth.<name>)} (gateway/tls/, valid 365 days)."
+      -keyout "$dir/wildcard.key" -out "$dir/wildcard.crt" \
+      -subj "/CN=$name" -addext "subjectAltName=$sans" 2>/dev/null ) \
+    || die "could not create the self-signed certificate for $name"
+  chmod 644 "$dir/wildcard.crt"
+  chmod 600 "$dir/wildcard.key"  # Caddy runs as the container's root, which is this user under rootless Podman
+  printf 'tls /etc/caddy/tls/%swildcard.crt /etc/caddy/tls/%swildcard.key\n' "${1:+$1/}" "${1:+$1/}" > "$dir/tls.caddy"
+  echo "Wrote a self-signed certificate for $name ($dir/, valid 365 days)."
+}
+
+make_gateway_cert() {
+  d=$(env_get DOMAIN)
+  mkdir -p gateway/tls
+  # An install from before per-domain certificates has one certificate that also names the extra domains; .domain recorded them after the
+  # base domain. It still serves the base domain, so only a changed DOMAIN (the first word) makes a new one.
+  if [ -f gateway/tls/.domain ] && [ "$(cut -d' ' -f1 gateway/tls/.domain)" != "$d" ]; then
+    rm -f gateway/tls/wildcard.crt gateway/tls/wildcard.key gateway/tls/tls.caddy gateway/tls/.domain
+  fi
+  make_cert_in "" "$d" "DNS:$d,DNS:auth.$d,DNS:lldap.$d,DNS:*.$d"
+  printf '%s\n' "$d" > gateway/tls/.domain
+  for e in $(domain_names "$(normalize_extra_domains "$(env_get EXTRA_DOMAINS)")"); do
+    make_cert_in "$e" "$e" "DNS:$e,DNS:auth.$e,DNS:*.$e"
+  done
 }
 
 # sso: the one-shot setup (create the lldap database, then the read-only account, groups and first admin), done BEFORE the long-running

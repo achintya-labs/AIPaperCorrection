@@ -24,7 +24,7 @@ original output is always kept.
 web/       Astro (React islands) UI. Also proxies /api/* to the API so the browser is same-origin.
 api/       FastAPI + SQLAlchemy/Alembic: rubrics, import, review, export, LDAP sign-in. Also runs as the worker.
 claude/    The `claude` container: Claude Code CLI + the Claude login + a small authenticated HTTP runner.
-gateway/   Caddy + Coraza WAF image and Caddyfile (the sso front door); gateway/tls/ holds its certificate.
+gateway/   Caddy + Coraza WAF image and Caddyfile (the sso front door); gateway/tls/ holds its certificates (the base domain's, and one folder per extra domain).
 proxy/     nginx.conf for AUTH_MODE=local (the old HTTPS front door)
 scripts/   claude-login.sh, make-cert.sh, make-sample-data.py, export-openapi.py, ...
 samples/   A small sample exam (paper, rubric, answer sheets, CSVs) for trying the system

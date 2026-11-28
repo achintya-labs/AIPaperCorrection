@@ -81,11 +81,11 @@ browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, option
 - **URLs:** `https://<DOMAIN>:5904` (the app), `auth.<DOMAIN>:5904` (login portal), `lldap.<DOMAIN>:5904` (user admin).
   `DOMAIN` defaults to `lan.internal`; `./run.sh --domain school.internal` changes it. Add
   `<this machine's IP>  <DOMAIN> auth.<DOMAIN> lldap.<DOMAIN>` to `/etc/hosts` on every machine that browses to it.
-  `run.sh` makes a **self-signed** certificate for the three names (`gateway/tls/`, valid 365 days, redone automatically when `DOMAIN`
-  changes); accept the browser warning once for each name, including `auth.<DOMAIN>` because signing in redirects there. (Caddy's own CA
+  `run.sh` makes a **self-signed** certificate for the three names (`gateway/tls/`, valid 365 days) only if there is none yet (it is redone only
+  when `DOMAIN` itself changes); accept the browser warning once for each name, including `auth.<DOMAIN>` because signing in redirects there. (Caddy's own CA
   isn't used: every browser would have to trust its root, and one that has met another "Caddy Local Authority" rejects the new one with
-  "invalid signature".) For a real certificate, replace `wildcard.crt`, `wildcard.key` and `tls.caddy` in `gateway/tls/` and delete
-  `gateway/tls/.domain` (see the comment at the top of [gateway/Caddyfile](../gateway/Caddyfile)).
+  "invalid signature".) For a real certificate, replace `wildcard.crt` and `wildcard.key` in `gateway/tls/` (keep the file names; `run.sh` never overwrites
+  existing files; see the comment at the top of [gateway/Caddyfile](../gateway/Caddyfile)).
 - **More domains (`EXTRA_DOMAINS`).** To serve the same app on other, unrelated domains, list them in `.env`
   (`EXTRA_DOMAINS=grader.other.org,papers.example.com`, or `./run.sh --extra-domains a.org,b.org`; blank removes them) and run `./run.sh restart`.
   Tinyauth's login cookie belongs to one domain, so each extra domain `X` gets its own login portal `auth.X` run by its own Tinyauth
@@ -93,7 +93,9 @@ browser -> caddy (Coraza WAF + OWASP CRS) -> tinyauth (login: LDAP users, option
   both are rewritten on every run, are gitignored, and the generated services also reach the same LLDAP). Everything else is shared: the users, the
   app, the one published port. What to know:
   - People **sign in separately on each domain**; "Log out" goes to the portal of the domain they are on.
-  - The self-signed certificate gains `X`, `auth.X` and `*.X` (redone when the list changes), `ALLOWED_HOSTS` gains `X`, and every browsing machine needs
+  - Each extra domain `X` has **its own certificate** in `gateway/tls/X/` (`wildcard.crt`, `wildcard.key`, `tls.caddy`; names `X`, `auth.X`, `*.X`), made
+    only if that folder has none: drop a real certificate into it and `run.sh` leaves it alone, and a domain removed from the list keeps its folder
+    (delete it yourself if you like). `ALLOWED_HOSTS` gains `X`, and every browsing machine needs
     `<this machine's IP>  X auth.X` in `/etc/hosts`; accept the certificate warning for `X` and `auth.X`. A real certificate must cover them too.
   - With Google sign-in, add `https://auth.X:<port>/api/oauth/callback/google` as a redirect URI in the Google console for each domain.
   - LLDAP's admin UI stays on `lldap.<DOMAIN>` only. A subdomain of `DOMAIN` (say `grader.<DOMAIN>`) shares the primary's cookie, so it isn't an extra

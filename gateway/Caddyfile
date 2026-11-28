@@ -3,10 +3,11 @@
 # Tinyauth sets Remote-User, Remote-Name and Remote-Email on the request that reaches the app; the app trusts them
 # because nothing but this container can reach it (no published ports, private network).
 #
-# Certificates: ./gateway/tls/ is mounted at /etc/caddy/tls and every site imports `*.caddy` from it. run.sh writes a self-signed
-# wildcard certificate there (wildcard.crt, wildcard.key and tls.caddy containing
-# `tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key`); replace the files for a real certificate. With nothing in the
-# folder Caddy falls back to its own internal CA for non-public names.
+# Certificates: ./gateway/tls/ is mounted at /etc/caddy/tls. The base domain's sites import `*.caddy` from it; run.sh writes a self-signed
+# certificate there (wildcard.crt, wildcard.key and tls.caddy containing `tls /etc/caddy/tls/wildcard.crt /etc/caddy/tls/wildcard.key`).
+# Every extra domain has its own in /etc/caddy/tls/<name>/ (same three files), imported by its generated site. run.sh makes a certificate only
+# where none exists, so replace the files of a domain for a real certificate. With nothing in the folder Caddy falls back to its own internal CA
+# for non-public names.
 {
 	email {$ACME_EMAIL}
 
